@@ -23,6 +23,7 @@ DEFAULTS: dict[str, Any] = {
     "wall_thickness": 0.2,
     "room_spacing": 0.0,
     "doorway_length": 0.0,
+    "hallway_end_padding": 0.0,
     "output": "output/floorplan.png",
     "resolution": 0.05,
     "debug": False,
@@ -151,6 +152,15 @@ def generate(
             show_default=str(DEFAULTS["doorway_length"]),
         ),
     ] = None,
+    hallway_end_padding: Annotated[
+        float | None,
+        typer.Option(
+            "--hallway-end-padding",
+            "-p",
+            help="Padding added to each end of the hallway in meters. When 0, hallway ends align with room edges.",
+            show_default=str(DEFAULTS["hallway_end_padding"]),
+        ),
+    ] = None,
     # Output options
     output: Annotated[
         str | None,
@@ -211,6 +221,9 @@ def generate(
     resolved_wall_thickness = resolve_param(wall_thickness, cfg, "wall_thickness", DEFAULTS["wall_thickness"])
     resolved_room_spacing = resolve_param(room_spacing, cfg, "room_spacing", DEFAULTS["room_spacing"])
     resolved_doorway_length = resolve_param(doorway_length, cfg, "doorway_length", DEFAULTS["doorway_length"])
+    resolved_hallway_end_padding = resolve_param(
+        hallway_end_padding, cfg, "hallway_end_padding", DEFAULTS["hallway_end_padding"]
+    )
     resolved_output = resolve_param(output, cfg, "output", DEFAULTS["output"])
     resolved_resolution = resolve_param(resolution, cfg, "resolution", DEFAULTS["resolution"])
     resolved_debug = resolve_param(debug, cfg, "debug", DEFAULTS["debug"])
@@ -230,6 +243,7 @@ def generate(
         wall_thickness=resolved_wall_thickness,
         room_spacing=resolved_room_spacing,
         doorway_length=resolved_doorway_length,
+        hallway_end_padding=resolved_hallway_end_padding,
     )
 
     typer.echo(f"Generating floorplan with {params.num_rooms} rooms...")
@@ -239,6 +253,7 @@ def generate(
     typer.echo(f"  Door length: {params.effective_doorway_length}m")
     typer.echo(f"  Wall thickness: {params.wall_thickness}m")
     typer.echo(f"  Room spacing: {params.room_spacing}m")
+    typer.echo(f"  Hallway end padding: {params.hallway_end_padding}m")
 
     # Generate floorplan
     generator = FloorplanGenerator(params)

@@ -274,8 +274,13 @@ class FloorplanGenerator:
         if rooms_per_side > 1:
             length += (rooms_per_side - 1) * effective_spacing
 
-        # Add padding at the ends (half a room width on each side)
-        length += self.params.room_wall_length
+        # Subtract the space taken by one room beyond the doorway so that the hallway ends at the
+        # doorway's end with 0 padding. The difference between room edge and doorway edge is
+        # (room_wall_length - doorway_width) / 2 on each side.
+        length -= self.params.room_wall_length - self.params.doorway_width
+
+        # Add padding at the ends (on each side)
+        length += 2 * self.params.hallway_end_padding
 
         return length
 
@@ -290,9 +295,17 @@ class FloorplanGenerator:
             A Polygon representing the hallway interior.
 
         """
-        # Hallway starts at x=0, centered on y=0
+        # Calculate the hallway start position to align with the first doorway's left edge when padding=0,
+        # and extend padding distance before it when padding > 0.
+        # First doorway left edge (when padding=0) is at: (room_wall_length/2) - doorway_width/2
+        # = (room_wall_length - doorway_width) / 2
+        # With padding, we subtract it to extend the hallway before the first doorway.
+        hallway_start_x = (
+            self.params.room_wall_length - self.params.doorway_width
+        ) / 2 - self.params.hallway_end_padding
+
         return create_hallway(
-            start_x=0,
+            start_x=hallway_start_x,
             start_y=0,
             length=hallway_length,
             width=self.params.hallway_width,
@@ -325,8 +338,9 @@ class FloorplanGenerator:
         # Even with room_spacing=0, we need wall_thickness for the shared wall
         effective_spacing = max(self.params.room_spacing, self.params.wall_thickness)
 
-        # Starting x position (centered in the first "slot")
-        start_x = self.params.room_wall_length / 2 + self.params.room_wall_length / 2
+        # Starting x position: half room width (to center the first room at room_wall_length/2)
+        # Padding is handled by the hallway, not by shifting room positions
+        start_x = self.params.room_wall_length / 2
 
         # Place rooms alternating between top and bottom
         for i in range(self.params.num_rooms):

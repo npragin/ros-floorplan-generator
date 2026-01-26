@@ -17,6 +17,8 @@ class FloorplanParams:
         room_spacing: Gap between adjacent rooms along the hallway in meters.
         doorway_length: Length/depth of door passage in meters. If <= wall_thickness,
             the doorway just cuts through the wall. If larger, creates an extended passage.
+        hallway_end_padding: Padding added to each end of the hallway in meters.
+            When set to 0, the hallway ends align with the edges of the first and last rooms.
 
     """
 
@@ -27,6 +29,7 @@ class FloorplanParams:
     wall_thickness: float
     room_spacing: float = 0.0
     doorway_length: float = 0.0
+    hallway_end_padding: float = 0.0
 
     def validate(self) -> None:
         """
@@ -72,6 +75,10 @@ class FloorplanParams:
         # Check doorway_length is non-negative
         if self.doorway_length < 0:
             raise ValueError(f"doorway_length must be non-negative, got {self.doorway_length}")
+
+        # Check hallway_end_padding is non-negative
+        if self.hallway_end_padding < 0:
+            raise ValueError(f"hallway_end_padding must be non-negative, got {self.hallway_end_padding}")
 
     @property
     def effective_doorway_length(self) -> float:

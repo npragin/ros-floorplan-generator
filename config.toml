@@ -6,6 +6,7 @@ room_wall_length = 8.0
 wall_thickness = 1.0
 room_spacing = 3.0
 doorway_length = 2.5
+hallway_end_padding = 2.5
 
 # Output options
 output = "output/floorplan.png"
