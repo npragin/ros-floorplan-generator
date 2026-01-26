@@ -1,6 +1,9 @@
 """Parameter definitions for floorplan generation."""
 
 from dataclasses import dataclass
+from typing import Literal
+
+TurnDirection = Literal["alternating", "random", "clockwise", "counterclockwise"]
 
 
 @dataclass
@@ -19,6 +22,12 @@ class FloorplanParams:
             the doorway just cuts through the wall. If larger, creates an extended passage.
         hallway_end_padding: Padding added to each end of the hallway in meters.
             When set to 0, the hallway ends align with the edges of the first and last rooms.
+        num_turns: Number of 90-degree turns in the hallway. 0 for straight hallway.
+        turn_direction: Direction pattern for turns. Options:
+            - "alternating": alternates between left and right turns
+            - "random": random turn direction at each turn
+            - "clockwise": always turn right (clockwise)
+            - "counterclockwise": always turn left (counterclockwise)
 
     """
 
@@ -30,6 +39,8 @@ class FloorplanParams:
     room_spacing: float = 0.0
     doorway_length: float = 0.0
     hallway_end_padding: float = 0.0
+    num_turns: int = 0
+    turn_direction: TurnDirection = "alternating"
 
     def validate(self) -> None:
         """
@@ -53,23 +64,10 @@ class FloorplanParams:
         if self.room_spacing < 0:
             raise ValueError(f"room_spacing must be non-negative, got {self.room_spacing}")
 
-        # Check doorway fits in hallway
-        if self.doorway_width >= self.hallway_width:
-            raise ValueError(
-                f"doorway_width ({self.doorway_width}) must be less than hallway_width ({self.hallway_width})"
-            )
-
         # Check doorway fits in room wall
-        if self.doorway_width >= self.room_wall_length:
+        if self.doorway_width > self.room_wall_length:
             raise ValueError(
-                f"doorway_width ({self.doorway_width}) must be less than room_wall_length ({self.room_wall_length})"
-            )
-
-        # Check wall thickness is reasonable
-        if self.wall_thickness >= self.room_wall_length / 2:
-            raise ValueError(
-                f"wall_thickness ({self.wall_thickness}) must be less than "
-                f"half the room_wall_length ({self.room_wall_length / 2})"
+                f"doorway_width ({self.doorway_width}) must be less than or equal to room_wall_length ({self.room_wall_length})"
             )
 
         # Check doorway_length is non-negative
@@ -79,6 +77,40 @@ class FloorplanParams:
         # Check hallway_end_padding is non-negative
         if self.hallway_end_padding < 0:
             raise ValueError(f"hallway_end_padding must be non-negative, got {self.hallway_end_padding}")
+
+        # Check num_turns is non-negative
+        if self.num_turns < 0:
+            raise ValueError(f"num_turns must be non-negative, got {self.num_turns}")
+
+        # Check turn_direction is valid
+        valid_turn_directions = ("alternating", "random", "clockwise", "counterclockwise")
+        if self.turn_direction not in valid_turn_directions:
+            raise ValueError(f"turn_direction must be one of {valid_turn_directions}, got '{self.turn_direction}'")
+
+    @property
+    def min_segment_length(self) -> float:
+        """
+        Get the minimum segment length based on room dimensions.
+
+        A segment must be long enough to fit at least one room on each side,
+        accounting for the doorway corridor gap and wall thickness. For middle
+        segments with turns at both ends, the turn buffer is used instead of
+        hallway_end_padding.
+
+        Returns:
+            The minimum segment length in meters.
+
+        """
+        # Calculate turn buffer (space needed around corners)
+        corridor_gap = max(self.wall_thickness, self.effective_doorway_length)
+        turn_buffer = self.room_wall_length / 2 + corridor_gap + self.hallway_width / 2
+
+        # Use the larger of turn_buffer or hallway_end_padding for each end
+        # This handles the worst case (middle segment with turns at both ends)
+        end_space = max(turn_buffer, self.hallway_end_padding)
+
+        # Minimum segment needs doorway width (not full room) plus space at both ends
+        return self.doorway_width + 2 * end_space
 
     @property
     def effective_doorway_length(self) -> float:

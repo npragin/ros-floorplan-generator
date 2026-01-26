@@ -1,11 +1,17 @@
 # Floorplan parameters
-num_rooms = 6
-doorway_width = 0.8
-hallway_width = 1
-room_wall_length = 3.7
+## General
 wall_thickness = 0.2
-room_spacing = 0
+num_turns = 1
+turn_direction = "alternating" # Options: "alternating", "random", "clockwise", "counterclockwise" but clockwise and counterclockwise are broken
+## Rooms
+num_rooms = 6
+room_wall_length = 3.7
+room_spacing = 0 # wall to wall spacing
+## Doorway
+doorway_width = 0.8
 doorway_length = 0
+## Hallway
+hallway_width = 1
 hallway_end_padding = 1.45 # Recommended value for vibes: (room_wall_length - doorway_width) / 2
 
 # Output options

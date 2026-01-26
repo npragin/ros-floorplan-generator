@@ -1,15 +1,20 @@
 """Main floorplan generator class."""
 
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
 from floorplan_generator.geometry import (
-    create_hallway,
+    Direction,
+    HallwaySegment,
+    create_hallway_segment,
     create_room,
     create_wall_ring,
+    get_perpendicular_offset_directions,
+    turn_direction,
 )
 from floorplan_generator.params import FloorplanParams
 
@@ -20,15 +25,18 @@ class Floorplan:
     Represents a complete floorplan layout.
 
     Attributes:
-        hallway_interior: The interior space of the hallway.
+        hallway_interior: The interior space of the hallway (union of all segments).
+        hallway_segments: List of hallway segments (for multi-segment layouts).
         room_interiors: List of room interior polygons.
         doors: List of door opening polygons.
         walls: The combined wall geometry.
         params: Parameters used to generate the floorplan.
+        room_ids: List of room IDs corresponding to room_interiors.
 
     """
 
     hallway_interior: Polygon
+    hallway_segments: list[HallwaySegment]
     room_interiors: list[Polygon]
     doors: list[Polygon]
     walls: Polygon
@@ -85,8 +93,14 @@ class FloorplanGenerator:
             A Floorplan object containing all geometry.
 
         """
-        hallway_length = self._calculate_hallway_length()
-        hallway_interior = self._create_hallway(hallway_length)
+        # Create hallway segments (handles both straight and multi-turn layouts)
+        segments, turn_directions = self._create_hallway_segments()
+
+        # Create corner fill pieces where segments meet
+        corner_pieces = self._create_corner_pieces(segments)
+
+        # Combine segments and corners into hallway interior
+        hallway_interior = unary_union([seg.polygon for seg in segments] + corner_pieces)
 
         if debug_dir:
             self._render_step(
@@ -94,7 +108,7 @@ class FloorplanGenerator:
                 hallway=hallway_interior,
             )
 
-        room_interiors, room_ids = self._place_rooms(hallway_length)
+        room_interiors, room_ids = self._place_rooms_along_segments(segments, turn_directions)
 
         if debug_dir:
             self._render_step(
@@ -103,7 +117,7 @@ class FloorplanGenerator:
                 rooms=room_interiors,
             )
 
-        doors = self._create_doors(room_interiors, hallway_interior)
+        doors = self._create_doors_for_segments(room_interiors, segments)
 
         if debug_dir:
             self._render_step(
@@ -126,6 +140,7 @@ class FloorplanGenerator:
 
         return Floorplan(
             hallway_interior=hallway_interior,
+            hallway_segments=segments,
             room_interiors=room_interiors,
             doors=doors,
             walls=walls,
@@ -284,39 +299,255 @@ class FloorplanGenerator:
 
         return length
 
-    def _create_hallway(self, hallway_length: float) -> Polygon:
+    def _create_hallway_segments(self) -> tuple[list[HallwaySegment], list[str]]:
         """
-        Create the main hallway.
-
-        Args:
-            hallway_length: Length of the hallway.
+        Create hallway segments with turns.
 
         Returns:
-            A Polygon representing the hallway interior.
+            A tuple of (list of HallwaySegment objects, list of turn directions used).
+            The turn directions list has length num_turns (one less than segments).
 
         """
-        # Calculate the hallway start position to align with the first doorway's left edge when padding=0,
-        # and extend padding distance before it when padding > 0.
-        # First doorway left edge (when padding=0) is at: (room_wall_length/2) - doorway_width/2
-        # = (room_wall_length - doorway_width) / 2
-        # With padding, we subtract it to extend the hallway before the first doorway.
+        if self.params.num_turns == 0:
+            # Simple case: single straight hallway
+            hallway_length = self._calculate_hallway_length()
+            hallway_start_x = (
+                self.params.room_wall_length - self.params.doorway_width
+            ) / 2 - self.params.hallway_end_padding
+            return (
+                [
+                    create_hallway_segment(
+                        start=(hallway_start_x, 0),
+                        direction="east",
+                        length=hallway_length,
+                        width=self.params.hallway_width,
+                    )
+                ],
+                [],
+            )
+
+        # Multi-segment layout with turns
+        num_segments = self.params.num_turns + 1
+        rooms_per_segment = self._calculate_rooms_per_segment(num_segments)
+
+        # Pre-compute all turn directions so we know them when calculating segment lengths
+        turn_directions_used: list[str] = []
+        for turn_idx in range(self.params.num_turns):
+            turn_directions_used.append(self._get_next_turn(turn_idx))
+
+        segments: list[HallwaySegment] = []
+        # First segment starts at hallway_start_x to align with room doorways
         hallway_start_x = (
             self.params.room_wall_length - self.params.doorway_width
         ) / 2 - self.params.hallway_end_padding
+        current_pos = (hallway_start_x, 0.0)
+        current_direction: Direction = "east"
 
-        return create_hallway(
-            start_x=hallway_start_x,
-            start_y=0,
-            length=hallway_length,
-            width=self.params.hallway_width,
-        )
+        for seg_idx, target_rooms in enumerate(rooms_per_segment):
+            # Determine if there are turns at start/end of this segment
+            has_turn_at_start = seg_idx > 0
+            has_turn_at_end = seg_idx < num_segments - 1
 
-    def _place_rooms(self, hallway_length: float) -> tuple[list[Polygon], list[int]]:
+            # Get turn direction at start (for corner skip calculation)
+            turn_at_start_dir = turn_directions_used[seg_idx - 1] if has_turn_at_start else None
+
+            # Calculate segment length with turn direction info for proper slot calculation
+            segment_length = self._calculate_segment_length(
+                target_rooms, has_turn_at_start, has_turn_at_end, turn_at_start_dir
+            )
+
+            # Ensure minimum segment length
+            segment_length = max(segment_length, self.params.min_segment_length)
+
+            # Create the segment
+            segment = create_hallway_segment(
+                start=current_pos,
+                direction=current_direction,
+                length=segment_length,
+                width=self.params.hallway_width,
+            )
+            segments.append(segment)
+
+            # Prepare for next segment (if not last)
+            if seg_idx < num_segments - 1:
+                # Move to end of current segment
+                current_pos = segment.end
+
+                # Apply turn direction
+                current_direction = turn_direction(current_direction, turn_directions_used[seg_idx])
+
+        return segments, turn_directions_used
+
+    def _create_corner_pieces(self, segments: list[HallwaySegment]) -> list[Polygon]:
         """
-        Place rooms along both sides of the hallway.
+        Create corner fill pieces where hallway segments meet.
+
+        At each turn point, there's a gap where the two perpendicular segments
+        don't overlap. This method creates square pieces to fill those gaps.
 
         Args:
-            hallway_length: Length of the hallway.
+            segments: List of hallway segments.
+
+        Returns:
+            List of corner fill polygons.
+
+        """
+        if len(segments) <= 1:
+            return []
+
+        corners: list[Polygon] = []
+        half_width = self.params.hallway_width / 2
+
+        for i in range(len(segments) - 1):
+            # The turn point is the end of segment i (same as start of segment i+1)
+            turn_point = segments[i].end
+
+            # Create a square centered at the turn point
+            corner = box(
+                turn_point[0] - half_width,
+                turn_point[1] - half_width,
+                turn_point[0] + half_width,
+                turn_point[1] + half_width,
+            )
+            corners.append(corner)
+
+        return corners
+
+    def _get_next_turn(self, turn_index: int) -> str:
+        """
+        Determine the next turn direction based on parameters.
+
+        Args:
+            turn_index: Index of the current turn (0-indexed).
+
+        Returns:
+            "left" or "right".
+
+        """
+        if self.params.turn_direction == "clockwise":
+            return "right"
+        elif self.params.turn_direction == "counterclockwise":
+            return "left"
+        elif self.params.turn_direction == "random":
+            return random.choice(["left", "right"])
+        else:  # alternating
+            return "left" if turn_index % 2 == 0 else "right"
+
+    def _calculate_rooms_per_segment(self, num_segments: int) -> list[int]:
+        """
+        Distribute rooms evenly across segments (differ by at most 1).
+
+        Args:
+            num_segments: Number of hallway segments.
+
+        Returns:
+            List of room counts for each segment.
+
+        """
+        base_rooms = self.params.num_rooms // num_segments
+        remainder = self.params.num_rooms % num_segments
+
+        # Spread remainder across segments (first segments get extra)
+        return [base_rooms + (1 if i < remainder else 0) for i in range(num_segments)]
+
+    def _calculate_slots_for_segment(
+        self,
+        target_rooms: int,
+        has_turn_at_start: bool,
+        turn_at_start_dir: str | None,
+    ) -> int:
+        """
+        Calculate how many room slots are needed to place target_rooms.
+
+        Accounts for corner skip: if there's a turn at start, one room at slot 0
+        will be skipped (inside corner), so we need an extra slot.
+
+        Args:
+            target_rooms: Number of rooms we want to place on this segment.
+            has_turn_at_start: Whether there's a turn at the start of this segment.
+            turn_at_start_dir: Direction of the turn at start ("left" or "right").
+
+        Returns:
+            Number of slots needed (rooms alternate left/right per slot).
+
+        """
+        if target_rooms == 0:
+            return 0
+
+        if not has_turn_at_start or turn_at_start_dir is None:
+            # No corner skip, slots = ceil(target_rooms / 2) since 2 rooms per slot
+            return (target_rooms + 1) // 2
+
+        # One room will be skipped at slot 0 (inside corner)
+        # So we need one extra iteration to compensate
+        return (target_rooms + 1 + 1) // 2
+
+    def _calculate_segment_length(
+        self,
+        target_rooms: int,
+        has_turn_at_start: bool = False,
+        has_turn_at_end: bool = False,
+        turn_at_start_dir: str | None = None,
+    ) -> float:
+        """
+        Calculate the required segment length for a given number of rooms.
+
+        Args:
+            target_rooms: Number of rooms to place on this segment.
+            has_turn_at_start: Whether there's a turn at the start of this segment.
+            has_turn_at_end: Whether there's a turn at the end of this segment.
+            turn_at_start_dir: Direction of the turn at start ("left" or "right").
+
+        Returns:
+            The segment length in meters.
+
+        """
+        if target_rooms == 0:
+            return self.params.min_segment_length
+
+        # Calculate turn buffer (space needed around corners)
+        corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
+        turn_buffer = self.params.room_wall_length / 2 + corridor_gap + self.params.hallway_width / 2
+
+        # Calculate slots needed accounting for corner skip
+        slots_needed = self._calculate_slots_for_segment(
+            target_rooms, has_turn_at_start, turn_at_start_dir
+        )
+
+        # Effective spacing between rooms on the same side
+        effective_spacing = max(self.params.room_spacing, self.params.wall_thickness)
+
+        # Length needed for rooms: slots_needed rooms on one side
+        length = slots_needed * self.params.room_wall_length
+        if slots_needed > 1:
+            length += (slots_needed - 1) * effective_spacing
+
+        # Adjust for doorway alignment (hallway extends to doorway edges)
+        length -= self.params.room_wall_length - self.params.doorway_width
+
+        # Add padding at ends (or turn buffer if there's a turn)
+        if has_turn_at_start:
+            length += turn_buffer
+        else:
+            length += self.params.hallway_end_padding
+
+        if has_turn_at_end:
+            length += turn_buffer
+        else:
+            length += self.params.hallway_end_padding
+
+        return max(length, self.params.min_segment_length)
+
+    def _place_rooms_along_segments(
+        self, segments: list[HallwaySegment], turn_directions: list[str]
+    ) -> tuple[list[Polygon], list[int]]:
+        """
+        Place rooms along hallway segments.
+
+        Args:
+            segments: List of hallway segments.
+            turn_directions: List of turn directions used between segments ("left" or "right").
+                Length is len(segments) - 1.
 
         Returns:
             A tuple of (list of room interior polygons, list of room IDs).
@@ -324,89 +555,257 @@ class FloorplanGenerator:
         """
         rooms: list[Polygon] = []
         room_ids: list[int] = []
+        room_id_counter = 0
 
-        # Calculate the gap between hallway and room (for the doorway corridor)
-        # The gap needs to be at least wall_thickness, but larger for extended doorways
-        # Since door is centered in gap, gap should accommodate half the door length on each side
-        corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
+        # Calculate even room distribution per segment
+        rooms_per_segment = self._calculate_rooms_per_segment(len(segments))
 
-        # Calculate the y-offset for rooms (from hallway center to room center)
-        # Room center is at: hallway_width/2 + corridor_gap + room_wall_length/2
-        y_offset = self.params.hallway_width / 2 + corridor_gap + self.params.room_wall_length / 2
+        for seg_idx, segment in enumerate(segments):
+            target_rooms_in_segment = rooms_per_segment[seg_idx]
+            if target_rooms_in_segment == 0:
+                continue
 
-        # Effective spacing must account for a shared wall between adjacent rooms
-        # Even with room_spacing=0, we need wall_thickness for the shared wall
-        effective_spacing = max(self.params.room_spacing, self.params.wall_thickness)
+            # Determine if there's a turn at the start of this segment
+            has_turn_at_start = seg_idx > 0
 
-        # Starting x position: half room width (to center the first room at room_wall_length/2)
-        # Padding is handled by the hallway, not by shifting room positions
-        start_x = self.params.room_wall_length / 2
+            # Get turn direction for inside corner detection at start
+            turn_at_start_dir = turn_directions[seg_idx - 1] if has_turn_at_start else None
 
-        # Place rooms alternating between top and bottom
-        for i in range(self.params.num_rooms):
-            # Calculate which "slot" this room is in (0-indexed)
-            slot = i // 2
-
-            # Calculate x position
-            x = start_x + slot * (self.params.room_wall_length + effective_spacing)
-
-            # Determine if room is on top (even index) or bottom (odd index)
-            y = y_offset if i % 2 == 0 else -y_offset
-
-            room = create_room(x, y, self.params.room_wall_length)
-            rooms.append(room)
-            room_ids.append(i)
+            segment_rooms, segment_ids = self._place_rooms_on_segment(
+                segment,
+                target_rooms_in_segment,
+                room_id_counter,
+                has_turn_at_start=has_turn_at_start,
+                turn_at_start_dir=turn_at_start_dir,
+            )
+            rooms.extend(segment_rooms)
+            room_ids.extend(segment_ids)
+            # Track actual rooms placed for ID continuity
+            room_id_counter += len(segment_rooms)
 
         return rooms, room_ids
 
-    def _create_doors(
+    def _place_rooms_on_segment(
         self,
-        rooms: list[Polygon],
-        hallway: Polygon,
-    ) -> list[Polygon]:
+        segment: HallwaySegment,
+        target_rooms: int,
+        start_room_id: int,
+        has_turn_at_start: bool = False,
+        turn_at_start_dir: str | None = None,
+    ) -> tuple[list[Polygon], list[int]]:
         """
-        Create door openings between rooms and hallway.
+        Place rooms along a single hallway segment.
+
+        The preceding segment owns the elbow at each turn, so rooms can extend
+        to the segment's end without restriction. Only the following segment
+        (at its start) needs to skip the inside corner room.
+
+        Args:
+            segment: The hallway segment.
+            target_rooms: Number of rooms to place on this segment.
+            start_room_id: Starting room ID for numbering.
+            has_turn_at_start: Whether there's a turn at the start of this segment.
+            turn_at_start_dir: Direction of the turn at start ("left" or "right").
+
+        Returns:
+            A tuple of (list of room polygons, list of room IDs).
+
+        """
+        rooms: list[Polygon] = []
+        room_ids: list[int] = []
+
+        if target_rooms == 0:
+            return rooms, room_ids
+
+        # Get perpendicular directions for room placement
+        left_dir, right_dir = get_perpendicular_offset_directions(segment.direction)
+
+        # Calculate corridor gap (between hallway edge and room)
+        corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
+
+        # Distance from hallway centerline to room center
+        room_offset = self.params.hallway_width / 2 + corridor_gap + self.params.room_wall_length / 2
+
+        # Effective spacing between rooms on the same side
+        effective_spacing = max(self.params.room_spacing, self.params.wall_thickness)
+
+        # Turn buffer: don't place rooms too close to turn points
+        # Buffer needs to account for room size plus corridor gap
+        turn_buffer = self.params.room_wall_length / 2 + corridor_gap + self.params.hallway_width / 2
+
+        # Calculate starting position along the segment
+        # For first segment (no turn at start): start at doorway_width/2 + hallway_end_padding
+        # For subsequent segments (turn at start): start at turn_buffer from segment start
+        if has_turn_at_start:
+            room_start_offset = turn_buffer
+        else:
+            room_start_offset = self.params.doorway_width / 2 + self.params.hallway_end_padding
+
+        if segment.is_horizontal:
+            start_along = segment.start[0] + room_start_offset
+            if segment.direction == "west":
+                start_along = segment.start[0] - room_start_offset
+        else:
+            start_along = segment.start[1] + room_start_offset
+            if segment.direction == "south":
+                start_along = segment.start[1] - room_start_offset
+
+        # Place rooms alternating between left and right sides until we have target_rooms
+        room_id_counter = start_room_id
+        i = 0  # iteration counter for slot/side calculation
+
+        while len(rooms) < target_rooms:
+            slot = i // 2  # Which slot along the segment
+            is_left_side = i % 2 == 0
+
+            # Skip rooms on the inside of corners at segment START only.
+            # After a left turn, the left side is the "inside" of the corner
+            # After a right turn, the right side is the "inside" of the corner
+            if has_turn_at_start and slot == 0:
+                if turn_at_start_dir == "left" and is_left_side:
+                    i += 1
+                    continue
+                if turn_at_start_dir == "right" and not is_left_side:
+                    i += 1
+                    continue
+
+            # Calculate position along segment
+            along_offset = slot * (self.params.room_wall_length + effective_spacing)
+            if segment.is_horizontal:
+                along_pos = start_along - along_offset if segment.direction == "west" else start_along + along_offset
+                center_along = along_pos
+                center_perp = segment.start[1]  # Y stays on centerline initially
+            else:
+                along_pos = start_along - along_offset if segment.direction == "south" else start_along + along_offset
+                center_along = segment.start[0]  # X stays on centerline initially
+                center_perp = along_pos
+
+            # Determine which side (even=left, odd=right relative to travel direction)
+            perp_direction = left_dir if is_left_side else right_dir
+
+            # Calculate room center position
+            if segment.is_horizontal:
+                room_x = center_along
+                room_y = center_perp + room_offset if perp_direction == "north" else center_perp - room_offset
+            else:
+                room_y = center_perp
+                room_x = center_along + room_offset if perp_direction == "east" else center_along - room_offset
+
+            room = create_room(room_x, room_y, self.params.room_wall_length)
+            rooms.append(room)
+            room_ids.append(room_id_counter)
+            room_id_counter += 1
+            i += 1
+
+        return rooms, room_ids
+
+    def _create_doors_for_segments(self, rooms: list[Polygon], segments: list[HallwaySegment]) -> list[Polygon]:
+        """
+        Create door openings between rooms and hallway segments.
 
         Args:
             rooms: List of room polygons.
-            hallway: The hallway polygon.
+            segments: List of hallway segments.
 
         Returns:
             List of door opening polygons.
 
         """
         doors: list[Polygon] = []
-        hallway_miny, hallway_maxy = hallway.bounds[1], hallway.bounds[3]
 
         for room in rooms:
-            # Determine which side the door should be on
             room_minx, room_miny, room_maxx, room_maxy = room.bounds
+            room_center_x = (room_minx + room_maxx) / 2
+            room_center_y = (room_miny + room_maxy) / 2
 
-            if room_miny > hallway_maxy:
-                # Room is above hallway, door connects room bottom to hallway top
-                # Door must span from inside hallway to inside room to ensure connection
-                door_y_min = hallway_maxy
-                door_y_max = room_miny
+            # Find which segment this room is adjacent to
+            segment = self._find_adjacent_segment(room, segments)
+
+            if segment.is_horizontal:
+                # Room is above or below a horizontal hallway
+                hallway_miny = segment.polygon.bounds[1]
+                hallway_maxy = segment.polygon.bounds[3]
+
+                if room_miny > hallway_maxy:
+                    # Room is above hallway
+                    door_y_min = hallway_maxy
+                    door_y_max = room_miny
+                else:
+                    # Room is below hallway
+                    door_y_min = room_maxy
+                    door_y_max = hallway_miny
+
+                door = box(
+                    room_center_x - self.params.doorway_width / 2,
+                    door_y_min,
+                    room_center_x + self.params.doorway_width / 2,
+                    door_y_max,
+                )
             else:
-                # Room is below hallway, door connects room top to hallway bottom
-                door_y_min = room_maxy
-                door_y_max = hallway_miny
+                # Room is left or right of a vertical hallway
+                hallway_minx = segment.polygon.bounds[0]
+                hallway_maxx = segment.polygon.bounds[2]
 
-            # X position is centered on the room
-            door_x = (room_minx + room_maxx) / 2
+                if room_minx > hallway_maxx:
+                    # Room is to the right of hallway
+                    door_x_min = hallway_maxx
+                    door_x_max = room_minx
+                else:
+                    # Room is to the left of hallway
+                    door_x_min = room_maxx
+                    door_x_max = hallway_minx
 
-            # Create door opening using doorway_width
-            from shapely.geometry import box
+                door = box(
+                    door_x_min,
+                    room_center_y - self.params.doorway_width / 2,
+                    door_x_max,
+                    room_center_y + self.params.doorway_width / 2,
+                )
 
-            door = box(
-                door_x - self.params.doorway_width / 2,
-                door_y_min,
-                door_x + self.params.doorway_width / 2,
-                door_y_max,
-            )
             doors.append(door)
 
         return doors
+
+    def _find_adjacent_segment(self, room: Polygon, segments: list[HallwaySegment]) -> HallwaySegment:
+        """
+        Find which hallway segment a room is adjacent to.
+
+        Args:
+            room: The room polygon.
+            segments: List of hallway segments.
+
+        Returns:
+            The adjacent HallwaySegment.
+
+        """
+        room_center_x = (room.bounds[0] + room.bounds[2]) / 2
+        room_center_y = (room.bounds[1] + room.bounds[3]) / 2
+
+        best_segment = segments[0]
+        best_distance = float("inf")
+
+        for segment in segments:
+            # Calculate distance from room center to segment centerline
+            if segment.is_horizontal:
+                # For horizontal segments, check if room x is within segment x range
+                seg_minx = min(segment.start[0], segment.end[0])
+                seg_maxx = max(segment.start[0], segment.end[0])
+                if seg_minx <= room_center_x <= seg_maxx:
+                    distance = abs(room_center_y - segment.start[1])
+                    if distance < best_distance:
+                        best_distance = distance
+                        best_segment = segment
+            else:
+                # For vertical segments, check if room y is within segment y range
+                seg_miny = min(segment.start[1], segment.end[1])
+                seg_maxy = max(segment.start[1], segment.end[1])
+                if seg_miny <= room_center_y <= seg_maxy:
+                    distance = abs(room_center_x - segment.start[0])
+                    if distance < best_distance:
+                        best_distance = distance
+                        best_segment = segment
+
+        return best_segment
 
     def _create_walls(
         self,

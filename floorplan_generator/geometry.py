@@ -1,6 +1,47 @@
 """Geometric helper functions using Shapely."""
 
+from dataclasses import dataclass
+from typing import Literal
+
 from shapely.geometry import Polygon, box
+
+Direction = Literal["east", "west", "north", "south"]
+
+
+@dataclass
+class HallwaySegment:
+    """
+    Represents a single segment of a hallway.
+
+    Attributes:
+        start: Starting point (x, y) of the segment centerline.
+        end: Ending point (x, y) of the segment centerline.
+        direction: Direction the hallway runs ("east", "west", "north", "south").
+        polygon: The Shapely Polygon representing the segment interior.
+
+    """
+
+    start: tuple[float, float]
+    end: tuple[float, float]
+    direction: Direction
+    polygon: Polygon
+
+    @property
+    def length(self) -> float:
+        """Get the length of this segment."""
+        dx = self.end[0] - self.start[0]
+        dy = self.end[1] - self.start[1]
+        return (dx**2 + dy**2) ** 0.5
+
+    @property
+    def is_horizontal(self) -> bool:
+        """Check if this segment runs horizontally (east-west)."""
+        return self.direction in ("east", "west")
+
+    @property
+    def is_vertical(self) -> bool:
+        """Check if this segment runs vertically (north-south)."""
+        return self.direction in ("north", "south")
 
 
 def create_rectangle(x: float, y: float, width: float, height: float) -> Polygon:
@@ -148,3 +189,110 @@ def create_wall_ring(
     """
     exterior = interior.buffer(wall_thickness, join_style="mitre")
     return exterior.difference(interior)
+
+
+def turn_direction(current: Direction, turn: Literal["left", "right"]) -> Direction:
+    """
+    Get the new direction after turning 90 degrees.
+
+    Args:
+        current: Current direction of travel.
+        turn: Which way to turn ("left" or "right").
+
+    Returns:
+        The new direction after turning.
+
+    """
+    if turn == "right":
+        # Clockwise: east -> south -> west -> north -> east
+        turns = {"east": "south", "south": "west", "west": "north", "north": "east"}
+    else:
+        # Counterclockwise: east -> north -> west -> south -> east
+        turns = {"east": "north", "north": "west", "west": "south", "south": "east"}
+    return turns[current]
+
+
+def move_in_direction(
+    start: tuple[float, float],
+    direction: Direction,
+    distance: float,
+) -> tuple[float, float]:
+    """
+    Calculate the endpoint after moving in a direction.
+
+    Args:
+        start: Starting point (x, y).
+        direction: Direction to move.
+        distance: Distance to move.
+
+    Returns:
+        The new point (x, y) after moving.
+
+    """
+    x, y = start
+    if direction == "east":
+        return (x + distance, y)
+    elif direction == "west":
+        return (x - distance, y)
+    elif direction == "north":
+        return (x, y + distance)
+    else:  # south
+        return (x, y - distance)
+
+
+def create_hallway_segment(
+    start: tuple[float, float],
+    direction: Direction,
+    length: float,
+    width: float,
+) -> HallwaySegment:
+    """
+    Create a hallway segment in any direction.
+
+    Args:
+        start: Starting point (x, y) of the segment centerline.
+        direction: Direction the hallway runs.
+        length: Length of the hallway segment.
+        width: Width of the hallway.
+
+    Returns:
+        A HallwaySegment containing the geometry and metadata.
+
+    """
+    end = move_in_direction(start, direction, length)
+    half_width = width / 2
+
+    x1, y1 = start
+    x2, y2 = end
+
+    if direction in ("east", "west"):
+        # Horizontal segment
+        min_x, max_x = min(x1, x2), max(x1, x2)
+        polygon = box(min_x, y1 - half_width, max_x, y1 + half_width)
+    else:
+        # Vertical segment
+        min_y, max_y = min(y1, y2), max(y1, y2)
+        polygon = box(x1 - half_width, min_y, x1 + half_width, max_y)
+
+    return HallwaySegment(start=start, end=end, direction=direction, polygon=polygon)
+
+
+def get_perpendicular_offset_directions(direction: Direction) -> tuple[Direction, Direction]:
+    """
+    Get the two directions perpendicular to the given direction.
+
+    Args:
+        direction: The hallway direction.
+
+    Returns:
+        A tuple of (left_side, right_side) directions relative to travel direction.
+        For a hallway going east, left is north and right is south.
+
+    """
+    perpendicular = {
+        "east": ("north", "south"),
+        "west": ("south", "north"),
+        "north": ("west", "east"),
+        "south": ("east", "west"),
+    }
+    return perpendicular[direction]

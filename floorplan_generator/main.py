@@ -24,6 +24,8 @@ DEFAULTS: dict[str, Any] = {
     "room_spacing": 0.0,
     "doorway_length": 0.0,
     "hallway_end_padding": 0.0,
+    "num_turns": 0,
+    "turn_direction": "alternating",
     "output": "output/floorplan.png",
     "resolution": 0.05,
     "debug": False,
@@ -161,6 +163,23 @@ def generate(
             show_default=str(DEFAULTS["hallway_end_padding"]),
         ),
     ] = None,
+    # Turn parameters
+    num_turns: Annotated[
+        int | None,
+        typer.Option(
+            "--num-turns",
+            help="Number of 90-degree turns in the hallway. 0 for straight hallway.",
+            show_default=str(DEFAULTS["num_turns"]),
+        ),
+    ] = None,
+    turn_direction: Annotated[
+        str | None,
+        typer.Option(
+            "--turn-direction",
+            help="Direction pattern for turns: 'alternating', 'random', 'clockwise', or 'counterclockwise'.",
+            show_default=str(DEFAULTS["turn_direction"]),
+        ),
+    ] = None,
     # Output options
     output: Annotated[
         str | None,
@@ -224,6 +243,8 @@ def generate(
     resolved_hallway_end_padding = resolve_param(
         hallway_end_padding, cfg, "hallway_end_padding", DEFAULTS["hallway_end_padding"]
     )
+    resolved_num_turns = resolve_param(num_turns, cfg, "num_turns", DEFAULTS["num_turns"])
+    resolved_turn_direction = resolve_param(turn_direction, cfg, "turn_direction", DEFAULTS["turn_direction"])
     resolved_output = resolve_param(output, cfg, "output", DEFAULTS["output"])
     resolved_resolution = resolve_param(resolution, cfg, "resolution", DEFAULTS["resolution"])
     resolved_debug = resolve_param(debug, cfg, "debug", DEFAULTS["debug"])
@@ -244,6 +265,8 @@ def generate(
         room_spacing=resolved_room_spacing,
         doorway_length=resolved_doorway_length,
         hallway_end_padding=resolved_hallway_end_padding,
+        num_turns=resolved_num_turns,
+        turn_direction=resolved_turn_direction,
     )
 
     typer.echo(f"Generating floorplan with {params.num_rooms} rooms...")
@@ -254,6 +277,8 @@ def generate(
     typer.echo(f"  Wall thickness: {params.wall_thickness}m")
     typer.echo(f"  Room spacing: {params.room_spacing}m")
     typer.echo(f"  Hallway end padding: {params.hallway_end_padding}m")
+    typer.echo(f"  Number of turns: {params.num_turns}")
+    typer.echo(f"  Turn direction: {params.turn_direction}")
 
     # Generate floorplan
     generator = FloorplanGenerator(params)
