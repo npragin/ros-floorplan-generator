@@ -1,15 +1,15 @@
 # Floorplan parameters
 num_rooms = 6
-doorway_width = 3.0
-hallway_width = 5.0
-room_wall_length = 8.0
-wall_thickness = 1.0
-room_spacing = 3.0
-doorway_length = 2.5
-hallway_end_padding = 2.5
+doorway_width = 0.8
+hallway_width = 1
+room_wall_length = 3.7
+wall_thickness = 0.2
+room_spacing = 0
+doorway_length = 0
+hallway_end_padding = 1.45 # Recommended value for vibes: (room_wall_length - doorway_width) / 2
 
 # Output options
 output = "output/floorplan.png"
-resolution = 0.05
+resolution = 0.01
 debug = false
 skip_validation = false
