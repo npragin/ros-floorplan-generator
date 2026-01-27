@@ -108,6 +108,27 @@ class LayoutValidator:
 
         return graph
 
+    def validate_no_hallway_overlaps(self, floorplan: Floorplan) -> bool:
+        """
+        Validate that non-adjacent hallway segments do not overlap.
+
+        This is a post-hoc safety net for collision detection.
+
+        Args:
+            floorplan: The floorplan to validate.
+
+        Returns:
+            True if no non-adjacent segments overlap, False otherwise.
+
+        """
+        segments = floorplan.hallway_segments
+        for i in range(len(segments)):
+            for j in range(i + 2, len(segments)):  # Skip adjacent (i+1)
+                intersection = segments[i].polygon.intersection(segments[j].polygon)
+                if intersection.area > self.tolerance:
+                    return False
+        return True
+
     def validate_all(self, floorplan: Floorplan) -> tuple[bool, list[str]]:
         """
         Run all validations and return results.
@@ -129,5 +150,8 @@ class LayoutValidator:
 
         if not self.validate_no_unreachable_spaces(floorplan):
             errors.append("There are unreachable spaces in the floorplan")
+
+        if not self.validate_no_hallway_overlaps(floorplan):
+            errors.append("Non-adjacent hallway segments overlap")
 
         return len(errors) == 0, errors

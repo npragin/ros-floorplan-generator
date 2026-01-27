@@ -7,14 +7,13 @@ from pathlib import Path
 from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
+from floorplan_generator.collision import CollisionError, plan_path
 from floorplan_generator.geometry import (
-    Direction,
     HallwaySegment,
     create_hallway_segment,
     create_room,
     create_wall_ring,
     get_perpendicular_offset_directions,
-    turn_direction,
 )
 from floorplan_generator.params import FloorplanParams
 
@@ -95,9 +94,12 @@ class FloorplanGenerator:
         Returns:
             A Floorplan object containing all geometry.
 
+        Raises:
+            ValueError: If a collision-free hallway path cannot be found.
+
         """
-        # Create hallway segments (handles both straight and multi-turn layouts)
-        segments, turn_directions = self._create_hallway_segments()
+        # Create hallway segments with collision detection and retry logic
+        segments, turn_directions = self._create_hallway_segments_with_retries()
 
         # Create corner fill pieces where segments meet
         corner_pieces = self._create_corner_pieces(segments)
@@ -302,6 +304,43 @@ class FloorplanGenerator:
 
         return length
 
+    def _create_hallway_segments_with_retries(self) -> tuple[list[HallwaySegment], list[str]]:
+        """
+        Create hallway segments, retrying with new seeds on collision.
+
+        Seeding is expected to be done by the caller (main.py) before invoking
+        generate(). This method only re-seeds on retry with system entropy.
+
+        Returns:
+            A tuple of (list of HallwaySegment objects, list of turn directions used).
+
+        Raises:
+            ValueError: If no collision-free path can be found after all retries.
+
+        """
+        # Deterministic turn modes exhaust all options via backtracking, no retry needed
+        deterministic = self.params.turn_direction in ("alternating", "clockwise", "counterclockwise")
+
+        if deterministic or self.max_retries == 0:
+            try:
+                return self._create_hallway_segments()
+            except CollisionError as e:
+                raise ValueError(f"Cannot generate collision-free hallway layout: {e}") from None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                return self._create_hallway_segments()
+            except CollisionError:
+                if attempt < self.max_retries:
+                    random.seed()
+                    continue
+                raise ValueError(
+                    f"Cannot generate collision-free hallway layout after {self.max_retries + 1} attempts. "
+                    "Try reducing num_turns or changing turn_direction."
+                ) from None
+
+        raise ValueError("Unexpected: exhausted retry loop without result.")  # pragma: no cover
+
     def _create_hallway_segments(self) -> tuple[list[HallwaySegment], list[str]]:
         """
         Create hallway segments with turns.
@@ -333,51 +372,40 @@ class FloorplanGenerator:
         num_segments = self.params.num_turns + 1
         rooms_per_segment = self._calculate_rooms_per_segment(num_segments)
 
-        # Pre-compute all turn directions so we know them when calculating segment lengths
-        turn_directions_used: list[str] = []
-        for turn_idx in range(self.params.num_turns):
-            turn_directions_used.append(self._get_next_turn(turn_idx))
-
-        segments: list[HallwaySegment] = []
         # First segment starts at hallway_start_x to align with room doorways
         hallway_start_x = (
             self.params.room_wall_length - self.params.doorway_width
         ) / 2 - self.params.hallway_end_padding
-        current_pos = (hallway_start_x, 0.0)
-        current_direction: Direction = "east"
+        start_pos = (hallway_start_x, 0.0)
 
-        for seg_idx, target_rooms in enumerate(rooms_per_segment):
-            # Determine if there are turns at start/end of this segment
+        # Build a segment length function that captures rooms_per_segment context
+        def segment_length_fn(seg_idx: int, turn_at_start_dir: str | None) -> float:
+            target_rooms = rooms_per_segment[seg_idx]
             has_turn_at_start = seg_idx > 0
             has_turn_at_end = seg_idx < num_segments - 1
+            length = self._calculate_segment_length(target_rooms, has_turn_at_start, has_turn_at_end, turn_at_start_dir)
+            return max(length, self.params.min_segment_length)
 
-            # Get turn direction at start (for corner skip calculation)
-            turn_at_start_dir = turn_directions_used[seg_idx - 1] if has_turn_at_start else None
+        # Use plan_path with backtracking for collision-free layout
+        planned_segments, turn_directions_used = plan_path(
+            start_pos=start_pos,
+            start_direction="east",
+            num_segments=num_segments,
+            segment_length_fn=segment_length_fn,
+            turn_chooser=self._get_next_turn,
+            hallway_width=self.params.hallway_width,
+        )
 
-            # Calculate segment length with turn direction info for proper slot calculation
-            segment_length = self._calculate_segment_length(
-                target_rooms, has_turn_at_start, has_turn_at_end, turn_at_start_dir
-            )
-
-            # Ensure minimum segment length
-            segment_length = max(segment_length, self.params.min_segment_length)
-
-            # Create the segment
+        # Convert PlannedSegments to HallwaySegments
+        segments: list[HallwaySegment] = []
+        for planned in planned_segments:
             segment = create_hallway_segment(
-                start=current_pos,
-                direction=current_direction,
-                length=segment_length,
+                start=planned.start,
+                direction=planned.direction,
+                length=planned.length,
                 width=self.params.hallway_width,
             )
             segments.append(segment)
-
-            # Prepare for next segment (if not last)
-            if seg_idx < num_segments - 1:
-                # Move to end of current segment
-                current_pos = segment.end
-
-                # Apply turn direction
-                current_direction = turn_direction(current_direction, turn_directions_used[seg_idx])
 
         return segments, turn_directions_used
 

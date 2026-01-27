@@ -1,5 +1,6 @@
 """Command-line interface for floorplan generation."""
 
+import random
 import tomllib
 from pathlib import Path
 from typing import Annotated, Any
@@ -275,6 +276,16 @@ def generate(
     if resolved_num_rooms is None:
         raise typer.BadParameter("num_rooms is required. Provide it via --num-rooms/-n or in a config file.")
 
+    # Handle seed: auto-generate if not provided, then seed the RNG once here
+    seed_was_provided = resolved_seed is not None
+    if resolved_seed is None:
+        resolved_seed = random.randrange(2**32)
+    random.seed(resolved_seed)
+
+    # If user explicitly chose a seed, don't retry (results should be deterministic)
+    if seed_was_provided:
+        resolved_max_retries = 0
+
     # Create parameters
     params = FloorplanParams(
         doorway_width=resolved_doorway_width,
@@ -300,7 +311,10 @@ def generate(
     typer.echo(f"  Hallway end padding: {params.hallway_end_padding}m")
     typer.echo(f"  Number of turns: {params.num_turns}")
     typer.echo(f"  Turn direction: {params.turn_direction}")
-    typer.echo(f"  Seed: {params.seed}")
+    if seed_was_provided:
+        typer.echo(f"  Seed: {resolved_seed}")
+    else:
+        typer.echo(f"  Seed: {resolved_seed} (auto-generated, use --seed {resolved_seed} to reproduce)")
     typer.echo(f"  Max retries: {resolved_max_retries}")
 
     # Generate floorplan
