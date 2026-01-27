@@ -507,12 +507,9 @@ class FloorplanGenerator:
 
         # Calculate turn buffer (space needed around corners)
         corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
-        turn_buffer = self.params.room_wall_length / 2 + corridor_gap + self.params.hallway_width / 2
 
         # Calculate slots needed accounting for corner skip
-        slots_needed = self._calculate_slots_for_segment(
-            target_rooms, has_turn_at_start, turn_at_start_dir
-        )
+        slots_needed = self._calculate_slots_for_segment(target_rooms, has_turn_at_start, turn_at_start_dir)
 
         # Effective spacing between rooms on the same side
         effective_spacing = max(self.params.room_spacing, self.params.wall_thickness)
@@ -522,19 +519,16 @@ class FloorplanGenerator:
         if slots_needed > 1:
             length += (slots_needed - 1) * effective_spacing
 
-        # Adjust for doorway alignment (hallway extends to doorway edges)
-        length -= self.params.room_wall_length - self.params.doorway_width
+        # Add turn adjustments only (dead ends need no adjustment since
+        # hallway_end_padding - doorway_overhang = 0)
+        # For turns: add (turn_buffer - room_wall_length/2) = corridor_gap + hallway_width/2
+        turn_adjustment = corridor_gap + self.params.hallway_width / 2
 
-        # Add padding at ends (or turn buffer if there's a turn)
         if has_turn_at_start:
-            length += turn_buffer
-        else:
-            length += self.params.hallway_end_padding
+            length += turn_adjustment
 
         if has_turn_at_end:
-            length += turn_buffer
-        else:
-            length += self.params.hallway_end_padding
+            length += turn_adjustment
 
         return max(length, self.params.min_segment_length)
 
