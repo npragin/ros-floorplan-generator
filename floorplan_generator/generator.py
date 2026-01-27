@@ -68,12 +68,14 @@ class Floorplan:
 class FloorplanGenerator:
     """Generates office-style floorplans with a linear hallway layout."""
 
-    def __init__(self, params: FloorplanParams) -> None:
+    def __init__(self, params: FloorplanParams, max_retries: int = 10) -> None:
         """
         Initialize the generator with parameters.
 
         Args:
             params: The floorplan generation parameters.
+            max_retries: Maximum retry attempts when collision-free path cannot be found.
+                Only applies when seed is not explicitly set.
 
         Raises:
             ValueError: If parameters are invalid.
@@ -81,6 +83,7 @@ class FloorplanGenerator:
         """
         self.params = params
         self.params.validate()
+        self.max_retries = max_retries
 
     def generate(self, debug_dir: str | None = None) -> Floorplan:
         """

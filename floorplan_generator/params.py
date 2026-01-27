@@ -28,6 +28,7 @@ class FloorplanParams:
             - "random": random turn direction at each turn
             - "clockwise": always turn right (clockwise)
             - "counterclockwise": always turn left (counterclockwise)
+        seed: Random seed for reproducible generation. When None, system entropy is used.
 
     """
 
@@ -41,6 +42,7 @@ class FloorplanParams:
     hallway_end_padding: float = 0.0
     num_turns: int = 0
     turn_direction: TurnDirection = "alternating"
+    seed: int | None = None
 
     def validate(self) -> None:
         """

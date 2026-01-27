@@ -3,6 +3,8 @@
 wall_thickness = 0.2
 num_turns = 1
 turn_direction = "alternating" # Options: "alternating", "random", "clockwise", "counterclockwise" but clockwise and counterclockwise are broken
+seed = 0
+max_retries = 1
 ## Rooms
 num_rooms = 6
 room_wall_length = 3.7

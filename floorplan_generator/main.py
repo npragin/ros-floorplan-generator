@@ -26,6 +26,8 @@ DEFAULTS: dict[str, Any] = {
     "hallway_end_padding": 0.0,
     "num_turns": 0,
     "turn_direction": "alternating",
+    "seed": None,
+    "max_retries": 10,
     "output": "output/floorplan.png",
     "resolution": 0.05,
     "debug": False,
@@ -180,6 +182,22 @@ def generate(
             show_default=str(DEFAULTS["turn_direction"]),
         ),
     ] = None,
+    # Seed and retry options
+    seed: Annotated[
+        int | None,
+        typer.Option(
+            "--seed",
+            help="Random seed for reproducible generation. If not set, system entropy is used.",
+        ),
+    ] = None,
+    max_retries: Annotated[
+        int | None,
+        typer.Option(
+            "--max-retries",
+            help="Maximum retry attempts when collision-free path cannot be found.",
+            show_default=str(DEFAULTS["max_retries"]),
+        ),
+    ] = None,
     # Output options
     output: Annotated[
         str | None,
@@ -245,6 +263,8 @@ def generate(
     )
     resolved_num_turns = resolve_param(num_turns, cfg, "num_turns", DEFAULTS["num_turns"])
     resolved_turn_direction = resolve_param(turn_direction, cfg, "turn_direction", DEFAULTS["turn_direction"])
+    resolved_seed = resolve_param(seed, cfg, "seed", DEFAULTS["seed"])
+    resolved_max_retries = resolve_param(max_retries, cfg, "max_retries", DEFAULTS["max_retries"])
     resolved_output = resolve_param(output, cfg, "output", DEFAULTS["output"])
     resolved_resolution = resolve_param(resolution, cfg, "resolution", DEFAULTS["resolution"])
     resolved_debug = resolve_param(debug, cfg, "debug", DEFAULTS["debug"])
@@ -267,6 +287,7 @@ def generate(
         hallway_end_padding=resolved_hallway_end_padding,
         num_turns=resolved_num_turns,
         turn_direction=resolved_turn_direction,
+        seed=resolved_seed,
     )
 
     typer.echo(f"Generating floorplan with {params.num_rooms} rooms...")
@@ -279,9 +300,11 @@ def generate(
     typer.echo(f"  Hallway end padding: {params.hallway_end_padding}m")
     typer.echo(f"  Number of turns: {params.num_turns}")
     typer.echo(f"  Turn direction: {params.turn_direction}")
+    typer.echo(f"  Seed: {params.seed}")
+    typer.echo(f"  Max retries: {resolved_max_retries}")
 
     # Generate floorplan
-    generator = FloorplanGenerator(params)
+    generator = FloorplanGenerator(params, max_retries=resolved_max_retries)
     floorplan = generator.generate(debug_dir=resolved_debug_steps)
 
     # Validate
