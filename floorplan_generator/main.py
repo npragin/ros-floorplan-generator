@@ -321,18 +321,11 @@ def generate(
     generator = FloorplanGenerator(params, max_retries=resolved_max_retries)
     floorplan = generator.generate(debug_dir=resolved_debug_steps)
 
-    # Validate
+    # Validate (defer output until end)
+    validation_errors: list[str] = []
     if not resolved_skip_validation:
-        typer.echo("\nValidating floorplan...")
         validator = LayoutValidator()
-        is_valid, errors = validator.validate_all(floorplan)
-        if is_valid:
-            typer.echo("  All validations passed!")
-        else:
-            typer.echo("  Validation errors:")
-            for error in errors:
-                typer.echo(f"    - {error}")
-            typer.echo("\nContinuing with rendering despite validation errors...")
+        _, validation_errors = validator.validate_all(floorplan)
 
     # Render
     output_path = Path(resolved_output)
@@ -352,6 +345,18 @@ def generate(
     width = bounds[2] - bounds[0]
     height = bounds[3] - bounds[1]
     typer.echo(f"\nFloorplan dimensions: {width:.1f}m x {height:.1f}m")
+
+    # Print validation results at the end (colored for visibility)
+    if not resolved_skip_validation:
+        if not validation_errors:
+            typer.secho("\nValidation: All checks passed!", fg=typer.colors.GREEN)
+        else:
+            typer.secho("\n" + "=" * 50, fg=typer.colors.RED, bold=True)
+            typer.secho("VALIDATION ERRORS", fg=typer.colors.RED, bold=True)
+            typer.secho("=" * 50, fg=typer.colors.RED, bold=True)
+            for error in validation_errors:
+                typer.secho(f"  • {error}", fg=typer.colors.RED)
+            typer.secho("=" * 50, fg=typer.colors.RED, bold=True)
 
 
 def main() -> None:
