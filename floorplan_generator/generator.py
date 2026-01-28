@@ -741,7 +741,9 @@ class FloorplanGenerator:
 
         # Calculate total slots to determine the last slot index for end-skip
         total_slots = self._calculate_slots_for_segment(
-            target_rooms, has_turn_at_start, turn_at_start_dir,
+            target_rooms,
+            has_turn_at_start,
+            turn_at_start_dir,
         )
         last_slot = total_slots - 1
 

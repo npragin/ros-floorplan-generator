@@ -103,16 +103,7 @@ class FloorplanParams:
             The minimum segment length in meters.
 
         """
-        # Calculate turn buffer (space needed around corners)
-        corridor_gap = max(self.wall_thickness, self.effective_doorway_length)
-        turn_buffer = self.room_wall_length / 2 + corridor_gap + self.hallway_width / 2
-
-        # Use the larger of turn_buffer or hallway_end_padding for each end
-        # This handles the worst case (middle segment with turns at both ends)
-        end_space = max(turn_buffer, self.hallway_end_padding)
-
-        # Minimum segment needs doorway width (not full room) plus space at both ends
-        return self.doorway_width + 2 * end_space
+        return self.room_wall_length
 
     @property
     def effective_doorway_length(self) -> float:
