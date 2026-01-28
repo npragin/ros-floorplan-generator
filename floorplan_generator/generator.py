@@ -4,7 +4,7 @@ import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shapely.geometry import Polygon, box
+from shapely.geometry import Point, Polygon, box
 from shapely.ops import unary_union
 
 from floorplan_generator.collision import CollisionError, plan_path
@@ -563,6 +563,57 @@ class FloorplanGenerator:
 
         return max(length, self.params.min_segment_length)
 
+    def _detect_loop_end_skips(self, segments: list[HallwaySegment]) -> dict[int, str]:
+        """
+        Detect where a segment's end approaches a non-adjacent segment (loop closure).
+
+        When hallway segments form a loop, the closing segment's end may be close
+        to an earlier non-adjacent segment. Rooms at that end on the inside of the
+        virtual corner would overlap with rooms from the approached segment.
+
+        Returns:
+            A dict mapping segment index -> virtual turn direction ("left" or "right")
+            for segments that need an end-skip.
+
+        """
+        corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
+        proximity_threshold = self.params.hallway_width / 2 + corridor_gap + self.params.room_wall_length
+
+        end_skips: dict[int, str] = {}
+
+        for i, seg_i in enumerate(segments):
+            for j, seg_j in enumerate(segments):
+                if abs(i - j) <= 1:
+                    continue
+
+                distance = Point(seg_i.end).distance(seg_j.polygon)
+                if distance >= proximity_threshold:
+                    continue
+
+                # Determine which side of seg_i the approached segment lies on
+                left_dir, _right_dir = get_perpendicular_offset_directions(seg_i.direction)
+
+                # Project the approached segment's midpoint relative to seg_i's end
+                mid_j = ((seg_j.start[0] + seg_j.end[0]) / 2, (seg_j.start[1] + seg_j.end[1]) / 2)
+                dx = mid_j[0] - seg_i.end[0]
+                dy = mid_j[1] - seg_i.end[1]
+
+                # Check which perpendicular side the approached segment is on
+                if left_dir == "north":
+                    is_left = dy > 0
+                elif left_dir == "south":
+                    is_left = dy < 0
+                elif left_dir == "east":
+                    is_left = dx > 0
+                else:  # west
+                    is_left = dx < 0
+
+                # The virtual turn direction is the side where the approached segment is
+                end_skips[i] = "left" if is_left else "right"
+                break  # Only need one match per segment
+
+        return end_skips
+
     def _place_rooms_along_segments(
         self, segments: list[HallwaySegment], turn_directions: list[str]
     ) -> tuple[list[Polygon], list[int]]:
@@ -585,6 +636,9 @@ class FloorplanGenerator:
         # Calculate even room distribution per segment
         rooms_per_segment = self._calculate_rooms_per_segment(len(segments))
 
+        # Detect loop closure points where end-of-segment rooms need skipping
+        end_skip_map = self._detect_loop_end_skips(segments)
+
         for seg_idx, segment in enumerate(segments):
             target_rooms_in_segment = rooms_per_segment[seg_idx]
             if target_rooms_in_segment == 0:
@@ -596,12 +650,18 @@ class FloorplanGenerator:
             # Get turn direction for inside corner detection at start
             turn_at_start_dir = turn_directions[seg_idx - 1] if has_turn_at_start else None
 
+            # Get end-skip info for loop closure
+            has_turn_at_end = seg_idx in end_skip_map
+            turn_at_end_dir = end_skip_map.get(seg_idx)
+
             segment_rooms, segment_ids = self._place_rooms_on_segment(
                 segment,
                 target_rooms_in_segment,
                 room_id_counter,
                 has_turn_at_start=has_turn_at_start,
                 turn_at_start_dir=turn_at_start_dir,
+                has_turn_at_end=has_turn_at_end,
+                turn_at_end_dir=turn_at_end_dir,
             )
             rooms.extend(segment_rooms)
             room_ids.extend(segment_ids)
@@ -617,6 +677,8 @@ class FloorplanGenerator:
         start_room_id: int,
         has_turn_at_start: bool = False,
         turn_at_start_dir: str | None = None,
+        has_turn_at_end: bool = False,
+        turn_at_end_dir: str | None = None,
     ) -> tuple[list[Polygon], list[int]]:
         """
         Place rooms along a single hallway segment.
@@ -631,6 +693,8 @@ class FloorplanGenerator:
             start_room_id: Starting room ID for numbering.
             has_turn_at_start: Whether there's a turn at the start of this segment.
             turn_at_start_dir: Direction of the turn at start ("left" or "right").
+            has_turn_at_end: Whether there's a virtual turn at the end (loop closure).
+            turn_at_end_dir: Direction of the virtual turn at end ("left" or "right").
 
         Returns:
             A tuple of (list of room polygons, list of room IDs).
@@ -675,15 +739,22 @@ class FloorplanGenerator:
             if segment.direction == "south":
                 start_along = segment.start[1] - room_start_offset
 
-        # Place rooms alternating between left and right sides until we have target_rooms
+        # Calculate total slots to determine the last slot index for end-skip
+        total_slots = self._calculate_slots_for_segment(
+            target_rooms, has_turn_at_start, turn_at_start_dir,
+        )
+        last_slot = total_slots - 1
+
+        # Place rooms alternating between left and right sides until we have enough
+        rooms_to_place = target_rooms
         room_id_counter = start_room_id
         i = 0  # iteration counter for slot/side calculation
 
-        while len(rooms) < target_rooms:
+        while len(rooms) < rooms_to_place:
             slot = i // 2  # Which slot along the segment
             is_left_side = i % 2 == 0
 
-            # Skip rooms on the inside of corners at segment START only.
+            # Skip rooms on the inside of corners at segment START.
             # After a left turn, the left side is the "inside" of the corner
             # After a right turn, the right side is the "inside" of the corner
             if has_turn_at_start and slot == 0:
@@ -691,6 +762,18 @@ class FloorplanGenerator:
                     i += 1
                     continue
                 if turn_at_start_dir == "right" and not is_left_side:
+                    i += 1
+                    continue
+
+            # Skip rooms on the inside of virtual corners at segment END (loop closure).
+            # Decrement rooms_to_place so the loop accepts placing one fewer room.
+            if has_turn_at_end and slot == last_slot:
+                if turn_at_end_dir == "left" and is_left_side:
+                    rooms_to_place -= 1
+                    i += 1
+                    continue
+                if turn_at_end_dir == "right" and not is_left_side:
+                    rooms_to_place -= 1
                     i += 1
                     continue
 
