@@ -308,22 +308,24 @@ def create_open_space_segment(
     length: float,
     width: float,
     expand_direction: Direction | None = None,
+    perp_length: float | None = None,
 ) -> HallwaySegment:
     """
-    Create an open space segment — a square polygon offset from the centerline.
+    Create an open space segment — a rectangular polygon offset from the centerline.
 
-    The square's side length equals the segment length. One perpendicular edge
+    The along-direction span equals ``length``. The perpendicular span equals
+    ``perp_length`` (defaults to ``length`` for a square). One perpendicular edge
     aligns with the regular hallway edge (width/2 from centerline) so that
-    corners connect properly. The opposite edge extends further out so the
-    total perpendicular span equals the segment length (making it a square).
+    corners connect properly. The opposite edge extends further out.
 
     Args:
         start: Starting point (x, y) of the segment centerline.
         direction: Direction the segment runs.
-        length: Length of the segment (becomes the square's side length).
+        length: Length of the segment along the direction of travel.
         width: Hallway width — used to align the near perpendicular edge.
         expand_direction: Which perpendicular direction gets the large expansion.
             Must be perpendicular to ``direction``. Defaults to "left" of travel.
+        perp_length: Perpendicular span of the open space. Defaults to ``length``.
 
     Returns:
         A HallwaySegment with is_open_space=True.
@@ -331,10 +333,12 @@ def create_open_space_segment(
     """
     if expand_direction is None:
         expand_direction = get_perpendicular_offset_directions(direction)[0]
+    if perp_length is None:
+        perp_length = length
 
     end = move_in_direction(start, direction, length)
     half_width = width / 2
-    large_offset = length - half_width
+    large_offset = perp_length - half_width
 
     x1, y1 = start
     x2, y2 = end

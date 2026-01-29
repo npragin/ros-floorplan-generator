@@ -31,6 +31,7 @@ class PlannedSegment:
     is_open_space: bool = False
     side_length: float = 0.0
     expand_direction: Direction | None = None
+    pre_committed_next_turn: bool = False
 
     def bounding_polygon(self, hallway_width: float) -> Polygon:
         """
@@ -52,7 +53,8 @@ class PlannedSegment:
                 min_y, max_y = min(y1, y2), max(y1, y2)
                 return box(x1 - half_width, min_y, x1 + half_width, max_y)
 
-        large_offset = self.length - half_width
+        perp = self.side_length if self.side_length > 0 else self.length
+        large_offset = perp - half_width
 
         if self.direction in ("east", "west"):
             min_x, max_x = min(x1, x2), max(x1, x2)
@@ -172,8 +174,9 @@ def _compute_attachment_offset(
 
     # Step sideways to center the next segment's centerline
     if prev_segment.is_open_space and prev_segment.expand_direction is not None:
+        perp = prev_segment.side_length if prev_segment.side_length > 0 else prev_segment.length
         sideways_amount = (
-            prev_segment.length - half_width if next_direction == prev_segment.expand_direction else half_width
+            perp - half_width if next_direction == prev_segment.expand_direction else half_width
         )
     else:
         sideways_amount = half_width
@@ -189,7 +192,7 @@ def plan_path(
     start_pos: tuple[float, float],
     start_direction: Direction,
     num_segments: int,
-    segment_length_fn: Callable[[int, str | None, Direction], float],
+    segment_length_fn: Callable[[int, str | None, Direction, str | None], float | tuple[float, float]],
     turn_chooser: Callable[[int], str],
     hallway_width: float,
     allowed_connections: set[tuple[int, int]] | None = None,
@@ -202,7 +205,7 @@ def plan_path(
         start_pos: Starting position of the first segment.
         start_direction: Initial direction of travel.
         num_segments: Total number of segments to plan.
-        segment_length_fn: Callable(seg_index, turn_at_start_dir, direction) -> length.
+        segment_length_fn: Callable(seg_index, turn_at_start_dir, direction, turn_at_end_dir) -> length.
         turn_chooser: Callable(turn_index) -> "left" or "right" (initial choice).
         hallway_width: Width of the hallway corridor.
         allowed_connections: Set of (i, j) segment index pairs allowed to overlap.
@@ -227,6 +230,11 @@ def plan_path(
     # turn_choices[i] = list of turns tried at turn index i
     turn_choices: list[list[str]] = []
 
+    # Track pre-committed end turns for open spaces.
+    # pre_committed_end_turns[turn_idx] = list of turns tried at that index
+    # by the preceding open space segment.
+    pre_committed_end_turns: dict[int, list[str]] = {}
+
     seg_idx = 0
     while seg_idx < num_segments:
         if seg_idx == 0:
@@ -242,32 +250,43 @@ def plan_path(
             while len(turn_choices) <= turn_idx:
                 turn_choices.append([])
 
-            # Get available turn options
-            if not turn_choices[turn_idx]:
-                # First attempt at this turn: use turn_chooser's suggestion first
-                initial = turn_chooser(turn_idx)
-                opposite = "right" if initial == "left" else "left"
-                available = [initial, opposite]
+            # Check if previous segment pre-committed this turn
+            prev_segment = segments[-1]
+            if prev_segment.pre_committed_next_turn:
+                # The turn was already chosen by the open space segment.
+                # Use it directly — if it collides, we'll backtrack to the
+                # open space to try a different end turn.
+                chosen_turn = turn_choices[turn_idx][-1]
             else:
-                # We're backtracking - see what's left
-                initial = turn_chooser(turn_idx)
-                opposite = "right" if initial == "left" else "left"
-                all_options = [initial, opposite]
-                available = [t for t in all_options if t not in turn_choices[turn_idx]]
+                # Get available turn options
+                if not turn_choices[turn_idx]:
+                    # First attempt at this turn: use turn_chooser's suggestion first
+                    initial = turn_chooser(turn_idx)
+                    opposite = "right" if initial == "left" else "left"
+                    available = [initial, opposite]
+                else:
+                    # We're backtracking - see what's left
+                    initial = turn_chooser(turn_idx)
+                    opposite = "right" if initial == "left" else "left"
+                    all_options = [initial, opposite]
+                    available = [t for t in all_options if t not in turn_choices[turn_idx]]
 
-            if not available:
-                # Exhausted both options at this turn, backtrack further
-                turn_choices[turn_idx] = []  # Reset for future visits
-                if seg_idx <= 1:
-                    raise CollisionError("No collision-free path found: exhausted all turn combinations.")
-                # Remove the previous segment and turn
-                segments.pop()
-                turns_used.pop()
-                seg_idx -= 1
-                continue
+                if not available:
+                    # Exhausted both options at this turn, backtrack further
+                    turn_choices[turn_idx] = []  # Reset for future visits
+                    pre_committed_end_turns.pop(turn_idx, None)
+                    if seg_idx <= 1:
+                        raise CollisionError(
+                            "No collision-free path found: exhausted all turn combinations."
+                        )
+                    # Remove the previous segment and turn
+                    segments.pop()
+                    turns_used.pop()
+                    seg_idx -= 1
+                    continue
 
-            chosen_turn = available[0]
-            turn_choices[turn_idx].append(chosen_turn)
+                chosen_turn = available[0]
+                turn_choices[turn_idx].append(chosen_turn)
 
             prev_segment = segments[-1]
             turn_lr: Literal["left", "right"] = "left" if chosen_turn == "left" else "right"
@@ -278,11 +297,61 @@ def plan_path(
             dx, dy = _compute_attachment_offset(prev_segment, direction, hallway_width)
             pos = (prev_segment.end[0] + dx, prev_segment.end[1] + dy)
 
+        is_open = seg_idx in os_indices
+
+        # For open spaces that aren't the last segment, pre-select the next turn
+        # so that segment_length_fn can compute the correct exit connection side.
+        turn_at_end_dir: str | None = None
+        if is_open and seg_idx < num_segments - 1:
+            end_turn_idx = seg_idx  # turn index between seg_idx and seg_idx+1
+
+            # Initialize tracking for this end turn
+            while len(turn_choices) <= end_turn_idx:
+                turn_choices.append([])
+            if end_turn_idx not in pre_committed_end_turns:
+                pre_committed_end_turns[end_turn_idx] = []
+
+            # Get available options for the end turn
+            if not pre_committed_end_turns[end_turn_idx]:
+                initial_end = turn_chooser(end_turn_idx)
+                opposite_end = "right" if initial_end == "left" else "left"
+                available_end = [initial_end, opposite_end]
+            else:
+                initial_end = turn_chooser(end_turn_idx)
+                opposite_end = "right" if initial_end == "left" else "left"
+                all_end_options = [initial_end, opposite_end]
+                available_end = [
+                    t for t in all_end_options if t not in pre_committed_end_turns[end_turn_idx]
+                ]
+
+            if not available_end:
+                # Exhausted end turn options for this open space.
+                # Backtrack: need to try a different start turn for this segment.
+                pre_committed_end_turns.pop(end_turn_idx, None)
+                turn_choices[end_turn_idx] = []
+                if seg_idx == 0:
+                    raise CollisionError(
+                        "No collision-free path found: exhausted all turn combinations."
+                    )
+                # Try the next available start turn (loop back to top)
+                continue
+
+            turn_at_end_dir = available_end[0]
+            pre_committed_end_turns[end_turn_idx].append(turn_at_end_dir)
+            # Record in turn_choices so the next segment sees it as pre-committed
+            turn_choices[end_turn_idx] = list(pre_committed_end_turns[end_turn_idx])
+
         # Calculate length and build planned segment
-        length = segment_length_fn(seg_idx, turn_at_start_dir if seg_idx > 0 else None, direction)
+        length_result = segment_length_fn(
+            seg_idx, turn_at_start_dir if seg_idx > 0 else None, direction, turn_at_end_dir
+        )
+        if isinstance(length_result, tuple):
+            length, perp_length = length_result
+        else:
+            length = length_result
+            perp_length = length
         end = move_in_direction(pos, direction, length)
 
-        is_open = seg_idx in os_indices
         planned = PlannedSegment(
             index=seg_idx,
             start=pos,
@@ -290,7 +359,8 @@ def plan_path(
             direction=direction,
             length=length,
             is_open_space=is_open,
-            side_length=length if is_open else 0.0,
+            side_length=perp_length if is_open else 0.0,
+            pre_committed_next_turn=is_open and turn_at_end_dir is not None,
         )
 
         # Compute expand direction for open space segments
@@ -306,7 +376,21 @@ def plan_path(
             # Collision detected - if this is the first segment we can't backtrack
             if seg_idx == 0:
                 raise CollisionError("First segment collides (impossible in normal usage).")
-            # Try the next available turn (loop back to top)
+
+            # If this open space pre-committed an end turn, try the next end turn
+            if is_open and turn_at_end_dir is not None:
+                continue
+
+            # If the previous segment pre-committed the turn for this segment,
+            # we can't try alternate turns here — backtrack to the open space
+            # so it can try a different end turn.
+            if seg_idx > 0 and segments[-1].pre_committed_next_turn:
+                segments.pop()
+                turns_used.pop()
+                seg_idx -= 1
+                continue
+
+            # Try the next available start turn (loop back to top)
             continue
 
         # No collision, commit this segment

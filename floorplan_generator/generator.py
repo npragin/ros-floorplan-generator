@@ -417,7 +417,12 @@ class FloorplanGenerator:
         start_pos = (hallway_start_x, 0.0)
 
         # Build a segment length function that captures rooms_per_segment context
-        def segment_length_fn(seg_idx: int, turn_at_start_dir: str | None, direction: Direction) -> float:
+        def segment_length_fn(
+            seg_idx: int,
+            turn_at_start_dir: str | None,
+            direction: Direction,
+            turn_at_end_dir: str | None,
+        ) -> float | tuple[float, float]:
             target_rooms = rooms_per_segment[seg_idx]
 
             if seg_idx in open_space_indices:
@@ -430,10 +435,18 @@ class FloorplanGenerator:
                     reverse_turn: Literal["left", "right"] = "right" if turn_at_start_dir == "left" else "left"
                     prev_direction = turn_direction_fn(direction, reverse_turn)
                     connection_sides.append(opposite_direction(prev_direction))
-                if seg_idx < num_segments - 1:
-                    connection_sides.append(direction)
+                if seg_idx < num_segments - 1 and turn_at_end_dir is not None:
+                    turn_lr: Literal["left", "right"] = "left" if turn_at_end_dir == "left" else "right"
+                    next_direction = turn_direction_fn(direction, turn_lr)
+                    connection_sides.append(next_direction)
 
-                length = self._calculate_open_space_length(target_rooms, num_available_sides, connection_sides)
+                along_length, perp_length = self._calculate_open_space_dimensions(
+                    target_rooms, num_available_sides, connection_sides, direction
+                )
+                return (
+                    max(along_length, self.params.min_segment_length),
+                    max(perp_length, self.params.min_segment_length),
+                )
             else:
                 has_turn_at_start = seg_idx > 0
                 has_turn_at_end = seg_idx < num_segments - 1
@@ -464,6 +477,7 @@ class FloorplanGenerator:
                     length=planned.length,
                     width=self.params.hallway_width,
                     expand_direction=planned.expand_direction,
+                    perp_length=planned.side_length if planned.side_length > 0 else None,
                 )
             else:
                 segment = create_hallway_segment(
@@ -953,7 +967,6 @@ class FloorplanGenerator:
             List of Direction values where rooms can be placed.
 
         """
-        segment = segments[seg_idx]
         all_sides: set[Direction] = {"east", "west", "north", "south"}
         connection_sides: set[Direction] = set()
 
@@ -964,7 +977,8 @@ class FloorplanGenerator:
 
         # Exit side: where the next segment connects
         if seg_idx < len(segments) - 1:
-            connection_sides.add(segment.direction)
+            next_seg = segments[seg_idx + 1]
+            connection_sides.add(next_seg.direction)
 
         return sorted(all_sides - connection_sides)
 
@@ -990,30 +1004,32 @@ class FloorplanGenerator:
             connections += 1
         return 4 - connections
 
-    def _calculate_open_space_length(
+    def _calculate_open_space_dimensions(
         self,
         target_rooms: int,
         num_available_sides: int,
         connection_sides: list[Direction],
-    ) -> float:
+        segment_direction: Direction,
+    ) -> tuple[float, float]:
         """
-        Calculate the required open space side length for a given number of rooms.
+        Calculate the required open space dimensions for a given number of rooms.
 
-        Distributes rooms across available sides and sizes the square to fit
-        the busiest side. Adds turn buffer space for each unique axis that has
+        Distributes rooms across available sides and sizes each dimension to fit
+        the busiest side. Adds corridor gap only to the dimension whose axis has
         a hallway connection, so rooms on perpendicular sides have clearance.
 
         Args:
             target_rooms: Number of rooms to place on this open space.
             num_available_sides: Number of sides available for room placement.
             connection_sides: Directions where hallway connections exist.
+            segment_direction: The direction the segment runs (determines axes).
 
         Returns:
-            The open space side length in meters.
+            A tuple of (along_length, perp_length) in meters.
 
         """
         if target_rooms == 0 or num_available_sides == 0:
-            return self.params.min_segment_length
+            return self.params.min_segment_length, self.params.min_segment_length
 
         # Distribute rooms across sides (same logic as _place_rooms_on_open_space)
         base_per_side = target_rooms // num_available_sides
@@ -1022,24 +1038,53 @@ class FloorplanGenerator:
 
         effective_spacing = max(self.params.room_spacing, self.params.wall_thickness)
 
-        length = max_rooms_on_side * self.params.room_wall_length
+        base_length = max_rooms_on_side * self.params.room_wall_length
         if max_rooms_on_side > 1:
-            length += (max_rooms_on_side - 1) * effective_spacing
+            base_length += (max_rooms_on_side - 1) * effective_spacing
 
-        # Add clearance for each axis that has a hallway connection.
-        # Connections on the same axis (e.g. west+east) only need one
-        # adjustment since they constrain the same perpendicular dimension.
+        # Add corridor gap only to the dimension that has connections on its axis.
         corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
 
-        connected_axes: set[str] = set()
-        for side in connection_sides:
-            if side in ("east", "west"):
-                connected_axes.add("horizontal")
+        along_extra = 0.0
+        perp_extra = 0.0
+        for connection_side in connection_sides:
+            if segment_direction in ("east", "west"):
+                if connection_side in ("east", "west"):
+                    perp_extra += corridor_gap
+                else:
+                    along_extra += corridor_gap
             else:
-                connected_axes.add("vertical")
-        length += len(connected_axes) * corridor_gap
+                if connection_side in ("north", "south"):
+                    perp_extra += corridor_gap
+                else:
+                    along_extra += corridor_gap
 
-        return max(length, self.params.min_segment_length)
+        has_horizontal_connection = any(s in ("east", "west") for s in connection_sides)
+        has_vertical_connection = any(s in ("north", "south") for s in connection_sides)
+
+        # Determine which axis is "along" vs "perpendicular" to the segment direction
+        # if segment_direction in ("east", "west"):
+        #     along_extra = corridor_gap if has_horizontal_connection else 0
+        #     perp_extra = corridor_gap if has_vertical_connection else 0
+        # else:
+        #     along_extra = corridor_gap if has_vertical_connection else 0
+        #     perp_extra = corridor_gap if has_horizontal_connection else 0
+
+        print("segment_direction", segment_direction)
+        print("connection_sides", connection_sides)
+        print("along_extra", along_extra)
+        print("perp_extra", perp_extra)
+
+        # temp = along_extra
+        # along_extra = perp_extra
+        # perp_extra = temp
+
+        # along_extra *= 2
+
+        along_length = max(base_length + along_extra, self.params.min_segment_length)
+        perp_length = max(base_length + perp_extra, self.params.min_segment_length)
+
+        return along_length, perp_length
 
     def _place_rooms_on_open_space(
         self,
@@ -1084,8 +1129,15 @@ class FloorplanGenerator:
 
         # The open space polygon bounds
         minx, miny, maxx, maxy = segment.polygon.bounds
-        center_x = (minx + maxx) / 2
-        center_y = (miny + maxy) / 2
+
+        # Determine connection sides to adjust room centering
+        connection_sides: set[Direction] = set()
+        if seg_idx > 0:
+            prev_seg = segments[seg_idx - 1]
+            connection_sides.add(opposite_direction(prev_seg.direction))
+        if seg_idx < len(segments) - 1:
+            next_seg = segments[seg_idx + 1]
+            connection_sides.add(next_seg.direction)
 
         room_id_counter = start_room_id
 
@@ -1097,28 +1149,68 @@ class FloorplanGenerator:
             # Room center distance from the square edge
             room_offset = corridor_gap + self.params.room_wall_length / 2
 
-            # Calculate positions along this side
-            total_room_span = (
-                num_rooms_this_side * self.params.room_wall_length + max(0, num_rooms_this_side - 1) * effective_spacing
-            )
-            # Center the rooms along the side
-            start_offset = -total_room_span / 2 + self.params.room_wall_length / 2
+            # Align rooms flush from the non-connection edge, packing toward the connection side.
+            # For north/south sides, rooms are arranged along x; for east/west, along y.
+            room_step = self.params.room_wall_length + effective_spacing
+
+            if side_dir in ("north", "south"):
+                west_connected = "west" in connection_sides
+                east_connected = "east" in connection_sides
+                if not west_connected:
+                    # Pack from west (minx) toward east
+                    first_room_along = minx + self.params.room_wall_length / 2
+                elif not east_connected:
+                    # Pack from east (maxx) toward west
+                    first_room_along = maxx - self.params.room_wall_length / 2
+                    room_step = -room_step
+                else:
+                    # Both sides connected, fall back to centering on usable space
+                    usable_minx = minx + corridor_gap
+                    usable_maxx = maxx - corridor_gap
+                    center = (usable_minx + usable_maxx) / 2
+                    total_span = (
+                        num_rooms_this_side * self.params.room_wall_length
+                        + max(0, num_rooms_this_side - 1) * effective_spacing
+                    )
+                    first_room_along = center - total_span / 2 + self.params.room_wall_length / 2
+                    room_step = self.params.room_wall_length + effective_spacing
+            else:  # east, west
+                south_connected = "south" in connection_sides
+                north_connected = "north" in connection_sides
+                if not south_connected:
+                    # Pack from south (miny) toward north
+                    first_room_along = miny + self.params.room_wall_length / 2
+                elif not north_connected:
+                    # Pack from north (maxy) toward south
+                    first_room_along = maxy - self.params.room_wall_length / 2
+                    room_step = -room_step
+                else:
+                    # Both sides connected, fall back to centering on usable space
+                    usable_miny = miny + corridor_gap
+                    usable_maxy = maxy - corridor_gap
+                    center = (usable_miny + usable_maxy) / 2
+                    total_span = (
+                        num_rooms_this_side * self.params.room_wall_length
+                        + max(0, num_rooms_this_side - 1) * effective_spacing
+                    )
+                    first_room_along = center - total_span / 2 + self.params.room_wall_length / 2
+                    room_step = self.params.room_wall_length + effective_spacing
 
             for room_i in range(num_rooms_this_side):
-                along_offset = start_offset + room_i * (self.params.room_wall_length + effective_spacing)
+                along_pos = first_room_along + room_i * room_step
 
                 if side_dir == "north":
-                    room_x = center_x + along_offset
+                    room_x = along_pos
                     room_y = maxy + room_offset
                 elif side_dir == "south":
-                    room_x = center_x + along_offset
+                    room_x = along_pos
                     room_y = miny - room_offset
                 elif side_dir == "east":
                     room_x = maxx + room_offset
-                    room_y = center_y + along_offset
+                    room_y = along_pos
                 else:  # west
                     room_x = minx - room_offset
-                    room_y = center_y + along_offset
+                    room_y = along_pos
 
                 room = create_room(room_x, room_y, self.params.room_wall_length)
                 rooms.append(room)

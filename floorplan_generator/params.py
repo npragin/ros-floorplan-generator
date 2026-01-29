@@ -72,7 +72,8 @@ class FloorplanParams:
         # Check doorway fits in room wall
         if self.doorway_width > self.room_wall_length:
             raise ValueError(
-                f"doorway_width ({self.doorway_width}) must be less than or equal to room_wall_length ({self.room_wall_length})"
+                f"doorway_width ({self.doorway_width}) must be less than or equal to room_wall_length \
+                    ({self.room_wall_length})"
             )
 
         # Check doorway_length is non-negative
