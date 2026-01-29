@@ -173,9 +173,7 @@ def _compute_attachment_offset(
     # Step sideways to center the next segment's centerline
     if prev_segment.is_open_space and prev_segment.expand_direction is not None:
         sideways_amount = (
-            prev_segment.length - half_width
-            if next_direction == prev_segment.expand_direction
-            else half_width
+            prev_segment.length - half_width if next_direction == prev_segment.expand_direction else half_width
         )
     else:
         sideways_amount = half_width

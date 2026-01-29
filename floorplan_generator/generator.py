@@ -152,9 +152,7 @@ class FloorplanGenerator:
                 doors=doors,
             )
 
-        walls = self._create_walls(
-            cast(Polygon, hallway_interior), room_interiors, doors
-        )
+        walls = self._create_walls(cast(Polygon, hallway_interior), room_interiors, doors)
 
         if debug_dir:
             self._render_step(
@@ -250,9 +248,7 @@ class FloorplanGenerator:
                 hole_coords = ring_to_pixel_coords(interior)
                 draw.polygon(hole_coords, fill=hole_fill)
 
-        def draw_polygon(
-            polygon: Polygon | MultiPolygon, fill: tuple[int, int, int]
-        ) -> None:
+        def draw_polygon(polygon: Polygon | MultiPolygon, fill: tuple[int, int, int]) -> None:
             """Draw a simple polygon (no hole handling needed for rooms/hallway/doors)."""
             if isinstance(polygon, MultiPolygon):
                 for geom in polygon.geoms:
@@ -421,9 +417,7 @@ class FloorplanGenerator:
         start_pos = (hallway_start_x, 0.0)
 
         # Build a segment length function that captures rooms_per_segment context
-        def segment_length_fn(
-            seg_idx: int, turn_at_start_dir: str | None, direction: Direction
-        ) -> float:
+        def segment_length_fn(seg_idx: int, turn_at_start_dir: str | None, direction: Direction) -> float:
             target_rooms = rooms_per_segment[seg_idx]
 
             if seg_idx in open_space_indices:
@@ -433,9 +427,7 @@ class FloorplanGenerator:
                 connection_sides: list[Direction] = []
                 if seg_idx > 0 and turn_at_start_dir is not None:
                     # Previous direction = reverse the turn from current direction
-                    reverse_turn: Literal["left", "right"] = (
-                        "right" if turn_at_start_dir == "left" else "left"
-                    )
+                    reverse_turn: Literal["left", "right"] = "right" if turn_at_start_dir == "left" else "left"
                     prev_direction = turn_direction_fn(direction, reverse_turn)
                     connection_sides.append(opposite_direction(prev_direction))
                 if seg_idx < num_segments - 1:
