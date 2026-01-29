@@ -1045,6 +1045,7 @@ class FloorplanGenerator:
         # Add corridor gap only to the dimension that has connections on its axis.
         corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
 
+        # Determine which axis is "along" vs "perpendicular" to the segment direction
         along_extra = 0.0
         perp_extra = 0.0
         for connection_side in connection_sides:
@@ -1058,28 +1059,6 @@ class FloorplanGenerator:
                     perp_extra += corridor_gap
                 else:
                     along_extra += corridor_gap
-
-        has_horizontal_connection = any(s in ("east", "west") for s in connection_sides)
-        has_vertical_connection = any(s in ("north", "south") for s in connection_sides)
-
-        # Determine which axis is "along" vs "perpendicular" to the segment direction
-        # if segment_direction in ("east", "west"):
-        #     along_extra = corridor_gap if has_horizontal_connection else 0
-        #     perp_extra = corridor_gap if has_vertical_connection else 0
-        # else:
-        #     along_extra = corridor_gap if has_vertical_connection else 0
-        #     perp_extra = corridor_gap if has_horizontal_connection else 0
-
-        print("segment_direction", segment_direction)
-        print("connection_sides", connection_sides)
-        print("along_extra", along_extra)
-        print("perp_extra", perp_extra)
-
-        # temp = along_extra
-        # along_extra = perp_extra
-        # perp_extra = temp
-
-        # along_extra *= 2
 
         along_length = max(base_length + along_extra, self.params.min_segment_length)
         perp_length = max(base_length + perp_extra, self.params.min_segment_length)
