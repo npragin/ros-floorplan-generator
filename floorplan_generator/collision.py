@@ -136,39 +136,55 @@ def _compute_expand_direction(
     return left_dir
 
 
+def _direction_vector(direction: Direction) -> tuple[float, float]:
+    """Return the unit vector for a cardinal direction."""
+    vectors: dict[str, tuple[float, float]] = {
+        "east": (1.0, 0.0),
+        "west": (-1.0, 0.0),
+        "north": (0.0, 1.0),
+        "south": (0.0, -1.0),
+    }
+    return vectors[direction]
+
+
 def _compute_attachment_offset(
     prev_segment: "PlannedSegment",
     next_direction: Direction,
     hallway_width: float,
 ) -> tuple[float, float]:
     """
-    Compute the perpendicular                                                                                                                                                                                        the next segment's start position.
+    Compute the offset from prev_segment.end to the next segment's start.
 
-    After an open space, the next segment starts at the attachment point on the
-    exit face closest to the next segment's travel direction.  The next segment
-    always turns 90° so ``next_direction`` is perpendicular to the open space.
+    Adjacent segments don't overlap. The next segment starts past the
+    previous segment's end: half the hallway width forward (clearing the
+    prev segment's body) plus half the hallway width sideways (centering
+    the next segment on its own centerline).
 
-    Returns an (dx, dy) offset to add to the centerline end position.
+    For open spaces the sideways offset uses the full asymmetric extent
+    when the next direction matches the expand direction.
+
+    Returns an (dx, dy) offset to add to the prev segment's end position.
     """
-    if not prev_segment.is_open_space or prev_segment.expand_direction is None:
-        return (0.0, 0.0)
-
     half_width = hallway_width / 2
-    large_offset = prev_segment.length - half_width
 
-    offset_amount = large_offset if next_direction == prev_segment.expand_direction else half_width
+    # Step forward past the end of the previous segment
+    forward = _direction_vector(prev_segment.direction)
 
-    dx, dy = 0.0, 0.0
-    if next_direction == "north":
-        dy = offset_amount
-    elif next_direction == "south":
-        dy = -offset_amount
-    elif next_direction == "east":
-        dx = offset_amount
-    elif next_direction == "west":
-        dx = -offset_amount
+    # Step sideways to center the next segment's centerline
+    if prev_segment.is_open_space and prev_segment.expand_direction is not None:
+        sideways_amount = (
+            prev_segment.length - half_width
+            if next_direction == prev_segment.expand_direction
+            else half_width
+        )
+    else:
+        sideways_amount = half_width
+    sideways = _direction_vector(next_direction)
 
-    return (dx, dy)
+    return (
+        half_width * forward[0] + sideways_amount * sideways[0],
+        half_width * forward[1] + sideways_amount * sideways[1],
+    )
 
 
 def plan_path(
@@ -256,14 +272,13 @@ def plan_path(
             turn_choices[turn_idx].append(chosen_turn)
 
             prev_segment = segments[-1]
-            pos = prev_segment.end
             turn_lr: Literal["left", "right"] = "left" if chosen_turn == "left" else "right"
             direction = turn_direction(prev_segment.direction, turn_lr)
             turn_at_start_dir = chosen_turn
 
-            # Shift start position if previous segment is an open space
+            # Offset so the next segment starts past the previous one (no overlap)
             dx, dy = _compute_attachment_offset(prev_segment, direction, hallway_width)
-            pos = (pos[0] + dx, pos[1] + dy)
+            pos = (prev_segment.end[0] + dx, prev_segment.end[1] + dy)
 
         # Calculate length and build planned segment
         length = segment_length_fn(seg_idx, turn_at_start_dir if seg_idx > 0 else None, direction)

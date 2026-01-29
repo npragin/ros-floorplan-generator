@@ -16,6 +16,7 @@ from floorplan_generator.geometry import (
     create_room,
     create_wall_ring,
     get_perpendicular_offset_directions,
+    move_in_direction,
     opposite_direction,
 )
 from floorplan_generator.geometry import (
@@ -496,13 +497,13 @@ class FloorplanGenerator:
             seg_j = segments[i + 1]
 
             if not seg_i.is_open_space and not seg_j.is_open_space:
-                # Both regular: standard hw x hw square
-                turn_point = seg_i.end
+                # Square corner piece just past the end of seg_i
+                corner_center = move_in_direction(seg_i.end, seg_i.direction, half_width)
                 corner = box(
-                    turn_point[0] - half_width,
-                    turn_point[1] - half_width,
-                    turn_point[0] + half_width,
-                    turn_point[1] + half_width,
+                    corner_center[0] - half_width,
+                    corner_center[1] - half_width,
+                    corner_center[0] + half_width,
+                    corner_center[1] + half_width,
                 )
             else:
                 # At least one open space: corner spans both segments'
@@ -658,16 +659,14 @@ class FloorplanGenerator:
         if slots_needed > 1:
             length += (slots_needed - 1) * effective_spacing
 
-        # Add turn adjustments only (dead ends need no adjustment since
-        # hallway_end_padding - doorway_overhang = 0)
-        # For turns: add (turn_buffer - room_wall_length/2) = corridor_gap + hallway_width/2
-        turn_adjustment = corridor_gap + self.params.hallway_width / 2
-
+        # Each turn end needs corridor_gap clearance between the corner
+        # piece and the first room (for the wall/doorway).
+        # Dead ends need no adjustment (hallway_end_padding handles them).
         if has_turn_at_start:
-            length += turn_adjustment
+            length += corridor_gap
 
         if has_turn_at_end:
-            length += turn_adjustment
+            length += corridor_gap
 
         return max(length, self.params.min_segment_length)
 
@@ -685,7 +684,7 @@ class FloorplanGenerator:
 
         """
         corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
-        proximity_threshold = self.params.hallway_width / 2 + corridor_gap + self.params.room_wall_length
+        proximity_threshold = corridor_gap + self.params.room_wall_length
 
         end_skips: dict[int, str] = {}
 
@@ -839,9 +838,9 @@ class FloorplanGenerator:
         # Effective spacing between rooms on the same side
         effective_spacing = max(self.params.room_spacing, self.params.wall_thickness)
 
-        # Turn buffer: don't place rooms too close to turn points
-        # Buffer needs to account for room size plus corridor gap
-        turn_buffer = self.params.room_wall_length / 2 + corridor_gap + self.params.hallway_width / 2
+        # Minimum distance from segment start to first room center at a turn:
+        # half a room width plus clearance for the wall/doorway at the corner
+        turn_buffer = self.params.room_wall_length / 2 + corridor_gap
 
         # Calculate starting position along the segment
         # For first segment (no turn at start): start at doorway_width/2 + hallway_end_padding
@@ -1021,21 +1020,18 @@ class FloorplanGenerator:
         if max_rooms_on_side > 1:
             length += (max_rooms_on_side - 1) * effective_spacing
 
-        # Add turn adjustment for each unique axis with a connection.
-        # Connections on the same axis (e.g. west+east) only need one adjustment
-        # since they constrain the same perpendicular dimension.
+        # Add clearance for each axis that has a hallway connection.
+        # Connections on the same axis (e.g. west+east) only need one
+        # adjustment since they constrain the same perpendicular dimension.
         corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
-        turn_adjustment = corridor_gap + self.params.hallway_width / 2
 
-        axes_with_connections: set[str] = set()
+        connected_axes: set[str] = set()
         for side in connection_sides:
             if side in ("east", "west"):
-                axes_with_connections.add("horizontal")
+                connected_axes.add("horizontal")
             else:
-                axes_with_connections.add("vertical")
-        length += len(axes_with_connections) * turn_adjustment
-
-        print("num axes with connections:", len(axes_with_connections))
+                connected_axes.add("vertical")
+        length += len(connected_axes) * corridor_gap
 
         return max(length, self.params.min_segment_length)
 
