@@ -3,8 +3,9 @@
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal, cast
 
-from shapely.geometry import Point, Polygon, box
+from shapely.geometry import LinearRing, MultiPolygon, Point, Polygon, box
 from shapely.ops import unary_union
 
 from floorplan_generator.collision import CollisionError, plan_path
@@ -68,7 +69,7 @@ class Floorplan:
 
         """
         all_interiors = [self.hallway_interior, *self.room_interiors, *self.doors]
-        return unary_union(all_interiors)
+        return cast(Polygon, unary_union(all_interiors))
 
 
 class FloorplanGenerator:
@@ -111,14 +112,20 @@ class FloorplanGenerator:
         if debug_dir:
             self._render_step(
                 Path(debug_dir) / "00_segments.png",
-                hallway=unary_union([seg.polygon for seg in segments]),
+                hallway=cast(
+                    Polygon | MultiPolygon,
+                    unary_union([seg.polygon for seg in segments]),
+                ),
             )
 
         # Create corner fill pieces where segments meet
         corner_pieces = self._create_corner_pieces(segments)
 
         # Combine segments and corners into hallway interior
-        hallway_interior = unary_union([seg.polygon for seg in segments] + corner_pieces)
+        hallway_interior = cast(
+            Polygon | MultiPolygon,
+            unary_union([seg.polygon for seg in segments] + corner_pieces),
+        )
 
         if debug_dir:
             self._render_step(
@@ -145,7 +152,9 @@ class FloorplanGenerator:
                 doors=doors,
             )
 
-        walls = self._create_walls(hallway_interior, room_interiors, doors)
+        walls = self._create_walls(
+            cast(Polygon, hallway_interior), room_interiors, doors
+        )
 
         if debug_dir:
             self._render_step(
@@ -157,7 +166,7 @@ class FloorplanGenerator:
             )
 
         return Floorplan(
-            hallway_interior=hallway_interior,
+            hallway_interior=cast(Polygon, hallway_interior),
             hallway_segments=segments,
             room_interiors=room_interiors,
             doors=doors,
@@ -169,10 +178,10 @@ class FloorplanGenerator:
     def _render_step(
         self,
         output_path: Path,
-        hallway: Polygon | None = None,
+        hallway: Polygon | MultiPolygon | None = None,
         rooms: list[Polygon] | None = None,
         doors: list[Polygon] | None = None,
-        walls: Polygon | None = None,
+        walls: Polygon | MultiPolygon | None = None,
     ) -> None:
         """
         Render a debug image showing the current generation step.
@@ -189,7 +198,6 @@ class FloorplanGenerator:
 
         import numpy as np
         from PIL import Image, ImageDraw
-        from shapely.geometry import MultiPolygon
 
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +236,7 @@ class FloorplanGenerator:
             py = height_px - 1 - round((y - min_y) / resolution)
             return (px, py)
 
-        def ring_to_pixel_coords(ring) -> list[tuple[int, int]]:
+        def ring_to_pixel_coords(ring: LinearRing) -> list[tuple[int, int]]:
             """Convert a LinearRing to pixel coordinates."""
             return [world_to_pixel(x, y) for x, y in ring.coords]
 
@@ -242,7 +250,9 @@ class FloorplanGenerator:
                 hole_coords = ring_to_pixel_coords(interior)
                 draw.polygon(hole_coords, fill=hole_fill)
 
-        def draw_polygon(polygon: Polygon, fill: tuple[int, int, int]) -> None:
+        def draw_polygon(
+            polygon: Polygon | MultiPolygon, fill: tuple[int, int, int]
+        ) -> None:
             """Draw a simple polygon (no hole handling needed for rooms/hallway/doors)."""
             if isinstance(polygon, MultiPolygon):
                 for geom in polygon.geoms:
@@ -411,7 +421,9 @@ class FloorplanGenerator:
         start_pos = (hallway_start_x, 0.0)
 
         # Build a segment length function that captures rooms_per_segment context
-        def segment_length_fn(seg_idx: int, turn_at_start_dir: str | None, direction: Direction) -> float:
+        def segment_length_fn(
+            seg_idx: int, turn_at_start_dir: str | None, direction: Direction
+        ) -> float:
             target_rooms = rooms_per_segment[seg_idx]
 
             if seg_idx in open_space_indices:
@@ -421,7 +433,9 @@ class FloorplanGenerator:
                 connection_sides: list[Direction] = []
                 if seg_idx > 0 and turn_at_start_dir is not None:
                     # Previous direction = reverse the turn from current direction
-                    reverse_turn = "right" if turn_at_start_dir == "left" else "left"
+                    reverse_turn: Literal["left", "right"] = (
+                        "right" if turn_at_start_dir == "left" else "left"
+                    )
                     prev_direction = turn_direction_fn(direction, reverse_turn)
                     connection_sides.append(opposite_direction(prev_direction))
                 if seg_idx < num_segments - 1:

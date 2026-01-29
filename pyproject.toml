@@ -21,6 +21,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["floorplan_generator*"]
 
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "types-shapely>=2.1.0.20250917",
+]
+
 [tool.ruff]
 target-version = "py313"
 line-length = 120
@@ -70,3 +76,4 @@ warn_return_any = true
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
+

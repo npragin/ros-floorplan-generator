@@ -1,9 +1,11 @@
 """Geometric helper functions using Shapely."""
 
+import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from shapely.geometry import Polygon, box
+from shapely.geometry.base import BaseGeometry
 
 Direction = Literal["east", "west", "north", "south"]
 
@@ -32,7 +34,7 @@ class HallwaySegment:
         """Get the length of this segment."""
         dx = self.end[0] - self.start[0]
         dy = self.end[1] - self.start[1]
-        return (dx**2 + dy**2) ** 0.5
+        return math.sqrt(dx * dx + dy * dy)
 
     @property
     def is_horizontal(self) -> bool:
@@ -62,7 +64,7 @@ def create_rectangle(x: float, y: float, width: float, height: float) -> Polygon
     return box(x, y, x + width, y + height)
 
 
-def create_room(center_x: float, center_y: float, side_length: float):
+def create_room(center_x: float, center_y: float, side_length: float) -> Polygon:
     """
     Create a square room centered at the given coordinates.
 
@@ -174,14 +176,14 @@ def get_wall_center_on_side(
 
 
 def create_wall_ring(
-    interior: Polygon,
+    interior: BaseGeometry,
     wall_thickness: float,
 ) -> Polygon:
     """
     Create a wall ring around an interior space.
 
     Args:
-        interior: The interior space polygon.
+        interior: The interior space polygon (or multi-polygon).
         wall_thickness: Thickness of the walls.
 
     Returns:
@@ -189,7 +191,7 @@ def create_wall_ring(
 
     """
     exterior = interior.buffer(wall_thickness, join_style="mitre")
-    return exterior.difference(interior)
+    return cast(Polygon, exterior.difference(interior))
 
 
 def turn_direction(current: Direction, turn: Literal["left", "right"]) -> Direction:
@@ -204,12 +206,23 @@ def turn_direction(current: Direction, turn: Literal["left", "right"]) -> Direct
         The new direction after turning.
 
     """
+    turns: dict[Direction, Direction]
     if turn == "right":
         # Clockwise: east -> south -> west -> north -> east
-        turns = {"east": "south", "south": "west", "west": "north", "north": "east"}
+        turns = {
+            "east": "south",
+            "south": "west",
+            "west": "north",
+            "north": "east",
+        }
     else:
         # Counterclockwise: east -> north -> west -> south -> east
-        turns = {"east": "north", "north": "west", "west": "south", "south": "east"}
+        turns = {
+            "east": "north",
+            "north": "west",
+            "west": "south",
+            "south": "east",
+        }
     return turns[current]
 
 
@@ -280,7 +293,7 @@ def create_hallway_segment(
 
 def opposite_direction(d: Direction) -> Direction:
     """Return the opposite direction."""
-    opposites: dict[str, Direction] = {
+    opposites: dict[Direction, Direction] = {
         "east": "west",
         "west": "east",
         "north": "south",
@@ -362,7 +375,7 @@ def get_perpendicular_offset_directions(direction: Direction) -> tuple[Direction
         For a hallway going east, left is north and right is south.
 
     """
-    perpendicular = {
+    perpendicular: dict[Direction, tuple[Direction, Direction]] = {
         "east": ("north", "south"),
         "west": ("south", "north"),
         "north": ("west", "east"),

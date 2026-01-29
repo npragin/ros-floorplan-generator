@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import LinearRing, MultiPolygon, Polygon
 
 from floorplan_generator.generator import Floorplan
 
@@ -61,7 +61,7 @@ class FloorplanRenderer:
             py = height_px - 1 - round((y - min_y) / self.resolution)
             return (px, py)
 
-        def ring_to_pixel_coords(ring) -> list[tuple[int, int]]:
+        def ring_to_pixel_coords(ring: LinearRing) -> list[tuple[int, int]]:
             """Convert a LinearRing to pixel coordinates."""
             return [world_to_pixel(x, y) for x, y in ring.coords]
 
@@ -132,11 +132,15 @@ class FloorplanRenderer:
             py = height_px - 1 - round((y - min_y) / self.resolution)
             return (px, py)
 
-        def ring_to_pixel_coords(ring) -> list[tuple[int, int]]:
+        def ring_to_pixel_coords(ring: LinearRing) -> list[tuple[int, int]]:
             """Convert a LinearRing to pixel coordinates."""
             return [world_to_pixel(x, y) for x, y in ring.coords]
 
-        def draw_polygon_with_holes(polygon: Polygon, fill: tuple, hole_fill: tuple) -> None:
+        def draw_polygon_with_holes(
+            polygon: Polygon,
+            fill: tuple[int, int, int],
+            hole_fill: tuple[int, int, int],
+        ) -> None:
             """Draw a polygon, properly handling interior holes."""
             exterior_coords = ring_to_pixel_coords(polygon.exterior)
             draw.polygon(exterior_coords, fill=fill)
