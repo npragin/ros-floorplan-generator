@@ -18,6 +18,9 @@ from floorplan_generator.geometry import (
     get_perpendicular_offset_directions,
     opposite_direction,
 )
+from floorplan_generator.geometry import (
+    turn_direction as turn_direction_fn,
+)
 from floorplan_generator.params import FloorplanParams
 
 
@@ -103,6 +106,12 @@ class FloorplanGenerator:
         """
         # Create hallway segments with collision detection and retry logic
         segments, turn_directions, open_space_indices = self._create_hallway_segments_with_retries()
+
+        if debug_dir:
+            self._render_step(
+                Path(debug_dir) / "00_segments.png",
+                hallway=unary_union([seg.polygon for seg in segments]),
+            )
 
         # Create corner fill pieces where segments meet
         corner_pieces = self._create_corner_pieces(segments)
@@ -386,12 +395,13 @@ class FloorplanGenerator:
 
         # Multi-segment layout with turns
         num_segments = self.params.num_turns + 1
-        rooms_per_segment = self._calculate_rooms_per_segment(num_segments)
 
         # Randomly select which segments become open spaces
         open_space_indices = set()
         if self.params.num_open_spaces > 0:
             open_space_indices = set(random.sample(range(num_segments), self.params.num_open_spaces))
+
+        rooms_per_segment = self._calculate_rooms_per_segment(num_segments, open_space_indices)
 
         # First segment starts at hallway_start_x to align with room doorways
         hallway_start_x = (
@@ -400,11 +410,30 @@ class FloorplanGenerator:
         start_pos = (hallway_start_x, 0.0)
 
         # Build a segment length function that captures rooms_per_segment context
-        def segment_length_fn(seg_idx: int, turn_at_start_dir: str | None) -> float:
+        def segment_length_fn(seg_idx: int, turn_at_start_dir: str | None, direction: Direction) -> float:
             target_rooms = rooms_per_segment[seg_idx]
-            has_turn_at_start = seg_idx > 0
-            has_turn_at_end = seg_idx < num_segments - 1
-            length = self._calculate_segment_length(target_rooms, has_turn_at_start, has_turn_at_end, turn_at_start_dir)
+
+            if seg_idx in open_space_indices:
+                num_available_sides = self._get_num_available_sides(seg_idx, num_segments)
+
+                # Determine connection sides from directions
+                connection_sides: list[Direction] = []
+                if seg_idx > 0 and turn_at_start_dir is not None:
+                    # Previous direction = reverse the turn from current direction
+                    reverse_turn = "right" if turn_at_start_dir == "left" else "left"
+                    prev_direction = turn_direction_fn(direction, reverse_turn)
+                    connection_sides.append(opposite_direction(prev_direction))
+                if seg_idx < num_segments - 1:
+                    connection_sides.append(direction)
+
+                length = self._calculate_open_space_length(target_rooms, num_available_sides, connection_sides)
+            else:
+                has_turn_at_start = seg_idx > 0
+                has_turn_at_end = seg_idx < num_segments - 1
+                length = self._calculate_segment_length(
+                    target_rooms, has_turn_at_start, has_turn_at_end, turn_at_start_dir
+                )
+
             return max(length, self.params.min_segment_length)
 
         # Use plan_path with backtracking for collision-free layout
@@ -507,22 +536,58 @@ class FloorplanGenerator:
         else:  # alternating
             return "left" if turn_index % 2 == 0 else "right"
 
-    def _calculate_rooms_per_segment(self, num_segments: int) -> list[int]:
+    def _calculate_rooms_per_segment(
+        self,
+        num_segments: int,
+        open_space_indices: set[int] | None = None,
+    ) -> list[int]:
         """
-        Distribute rooms evenly across segments (differ by at most 1).
+        Distribute rooms across segments proportionally to capacity.
+
+        Regular segments have 2 sides. Open spaces have 2-4 sides depending
+        on position (connections reduce available sides). Rooms are distributed
+        proportionally to each segment's side count.
 
         Args:
             num_segments: Number of hallway segments.
+            open_space_indices: Set of segment indices that are open spaces.
 
         Returns:
             List of room counts for each segment.
 
         """
-        base_rooms = self.params.num_rooms // num_segments
-        remainder = self.params.num_rooms % num_segments
+        if open_space_indices is None:
+            open_space_indices = set()
 
-        # Spread remainder across segments (first segments get extra)
-        return [base_rooms + (1 if i < remainder else 0) for i in range(num_segments)]
+        # Calculate weight (available sides) per segment
+        weights = []
+        for i in range(num_segments):
+            if i in open_space_indices:
+                weights.append(self._get_num_available_sides(i, num_segments))
+            else:
+                weights.append(2)
+
+        total_weight = sum(weights)
+        total_rooms = self.params.num_rooms
+
+        # Distribute proportionally with integer rounding
+        result = [0] * num_segments
+        assigned = 0
+        for i in range(num_segments):
+            result[i] = int(total_rooms * weights[i] / total_weight)
+            assigned += result[i]
+
+        # Distribute remainder to highest-weight segments first
+        remainder = total_rooms - assigned
+        # Sort indices by weight descending, then by index for stability
+        indices_by_weight = sorted(range(num_segments), key=lambda i: (-weights[i], i))
+        for idx in indices_by_weight:
+            if remainder <= 0:
+                break
+            result[idx] += 1
+            remainder -= 1
+
+        return result
 
     def _calculate_slots_for_segment(
         self,
@@ -683,8 +748,8 @@ class FloorplanGenerator:
         if open_space_indices is None:
             open_space_indices = set()
 
-        # Calculate even room distribution per segment
-        rooms_per_segment = self._calculate_rooms_per_segment(len(segments))
+        # Calculate room distribution per segment (weighted by available sides)
+        rooms_per_segment = self._calculate_rooms_per_segment(len(segments), open_space_indices)
 
         # Detect loop closure points where end-of-segment rooms need skipping
         end_skip_map = self._detect_loop_end_skips(segments)
@@ -897,6 +962,82 @@ class FloorplanGenerator:
             connection_sides.add(segment.direction)
 
         return sorted(all_sides - connection_sides)
+
+    def _get_num_available_sides(self, seg_idx: int, num_segments: int) -> int:
+        """
+        Get the number of available sides for an open space at a given position.
+
+        Based on connection count: first/last segments have 1 connection,
+        intermediate segments have 2, and a single segment has 0.
+
+        Args:
+            seg_idx: Index of the segment.
+            num_segments: Total number of segments.
+
+        Returns:
+            Number of available sides (4, 3, or 2).
+
+        """
+        connections = 0
+        if seg_idx > 0:
+            connections += 1
+        if seg_idx < num_segments - 1:
+            connections += 1
+        return 4 - connections
+
+    def _calculate_open_space_length(
+        self,
+        target_rooms: int,
+        num_available_sides: int,
+        connection_sides: list[Direction],
+    ) -> float:
+        """
+        Calculate the required open space side length for a given number of rooms.
+
+        Distributes rooms across available sides and sizes the square to fit
+        the busiest side. Adds turn buffer space for each unique axis that has
+        a hallway connection, so rooms on perpendicular sides have clearance.
+
+        Args:
+            target_rooms: Number of rooms to place on this open space.
+            num_available_sides: Number of sides available for room placement.
+            connection_sides: Directions where hallway connections exist.
+
+        Returns:
+            The open space side length in meters.
+
+        """
+        if target_rooms == 0 or num_available_sides == 0:
+            return self.params.min_segment_length
+
+        # Distribute rooms across sides (same logic as _place_rooms_on_open_space)
+        base_per_side = target_rooms // num_available_sides
+        remainder = target_rooms % num_available_sides
+        max_rooms_on_side = base_per_side + (1 if remainder > 0 else 0)
+
+        effective_spacing = max(self.params.room_spacing, self.params.wall_thickness)
+
+        length = max_rooms_on_side * self.params.room_wall_length
+        if max_rooms_on_side > 1:
+            length += (max_rooms_on_side - 1) * effective_spacing
+
+        # Add turn adjustment for each unique axis with a connection.
+        # Connections on the same axis (e.g. west+east) only need one adjustment
+        # since they constrain the same perpendicular dimension.
+        corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
+        turn_adjustment = corridor_gap + self.params.hallway_width / 2
+
+        axes_with_connections: set[str] = set()
+        for side in connection_sides:
+            if side in ("east", "west"):
+                axes_with_connections.add("horizontal")
+            else:
+                axes_with_connections.add("vertical")
+        length += len(axes_with_connections) * turn_adjustment
+
+        print("num axes with connections:", len(axes_with_connections))
+
+        return max(length, self.params.min_segment_length)
 
     def _place_rooms_on_open_space(
         self,

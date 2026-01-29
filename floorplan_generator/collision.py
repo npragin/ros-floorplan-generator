@@ -142,7 +142,7 @@ def _compute_attachment_offset(
     hallway_width: float,
 ) -> tuple[float, float]:
     """
-    Compute the perpendicular offset for the next segment's start position.
+    Compute the perpendicular                                                                                                                                                                                        the next segment's start position.
 
     After an open space, the next segment starts at the attachment point on the
     exit face closest to the next segment's travel direction.  The next segment
@@ -156,10 +156,7 @@ def _compute_attachment_offset(
     half_width = hallway_width / 2
     large_offset = prev_segment.length - half_width
 
-    if next_direction == prev_segment.expand_direction:
-        offset_amount = large_offset
-    else:
-        offset_amount = half_width
+    offset_amount = large_offset if next_direction == prev_segment.expand_direction else half_width
 
     dx, dy = 0.0, 0.0
     if next_direction == "north":
@@ -178,7 +175,7 @@ def plan_path(
     start_pos: tuple[float, float],
     start_direction: Direction,
     num_segments: int,
-    segment_length_fn: Callable[[int, str | None], float],
+    segment_length_fn: Callable[[int, str | None, Direction], float],
     turn_chooser: Callable[[int], str],
     hallway_width: float,
     allowed_connections: set[tuple[int, int]] | None = None,
@@ -191,7 +188,7 @@ def plan_path(
         start_pos: Starting position of the first segment.
         start_direction: Initial direction of travel.
         num_segments: Total number of segments to plan.
-        segment_length_fn: Callable(seg_index, turn_at_start_dir) -> length.
+        segment_length_fn: Callable(seg_index, turn_at_start_dir, direction) -> length.
         turn_chooser: Callable(turn_index) -> "left" or "right" (initial choice).
         hallway_width: Width of the hallway corridor.
         allowed_connections: Set of (i, j) segment index pairs allowed to overlap.
@@ -269,7 +266,7 @@ def plan_path(
             pos = (pos[0] + dx, pos[1] + dy)
 
         # Calculate length and build planned segment
-        length = segment_length_fn(seg_idx, turn_at_start_dir if seg_idx > 0 else None)
+        length = segment_length_fn(seg_idx, turn_at_start_dir if seg_idx > 0 else None, direction)
         end = move_in_direction(pos, direction, length)
 
         is_open = seg_idx in os_indices
@@ -286,9 +283,7 @@ def plan_path(
         # Compute expand direction for open space segments
         if is_open:
             if seg_idx > 0:
-                planned.expand_direction = _compute_expand_direction(
-                    direction, segments[-1].direction
-                )
+                planned.expand_direction = _compute_expand_direction(direction, segments[-1].direction)
             else:
                 # First segment: nothing to collide with, default to left of travel
                 planned.expand_direction = get_perpendicular_offset_directions(direction)[0]
