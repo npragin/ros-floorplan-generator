@@ -9,11 +9,14 @@ from shapely.ops import unary_union
 
 from floorplan_generator.collision import CollisionError, plan_path
 from floorplan_generator.geometry import (
+    Direction,
     HallwaySegment,
     create_hallway_segment,
+    create_open_space_segment,
     create_room,
     create_wall_ring,
     get_perpendicular_offset_directions,
+    opposite_direction,
 )
 from floorplan_generator.params import FloorplanParams
 
@@ -99,7 +102,7 @@ class FloorplanGenerator:
 
         """
         # Create hallway segments with collision detection and retry logic
-        segments, turn_directions = self._create_hallway_segments_with_retries()
+        segments, turn_directions, open_space_indices = self._create_hallway_segments_with_retries()
 
         # Create corner fill pieces where segments meet
         corner_pieces = self._create_corner_pieces(segments)
@@ -113,7 +116,7 @@ class FloorplanGenerator:
                 hallway=hallway_interior,
             )
 
-        room_interiors, room_ids = self._place_rooms_along_segments(segments, turn_directions)
+        room_interiors, room_ids = self._place_rooms_along_segments(segments, turn_directions, open_space_indices)
 
         if debug_dir:
             self._render_step(
@@ -304,7 +307,9 @@ class FloorplanGenerator:
 
         return length
 
-    def _create_hallway_segments_with_retries(self) -> tuple[list[HallwaySegment], list[str]]:
+    def _create_hallway_segments_with_retries(
+        self,
+    ) -> tuple[list[HallwaySegment], list[str], set[int]]:
         """
         Create hallway segments, retrying with new seeds on collision.
 
@@ -312,7 +317,8 @@ class FloorplanGenerator:
         generate(). This method only re-seeds on retry with system entropy.
 
         Returns:
-            A tuple of (list of HallwaySegment objects, list of turn directions used).
+            A tuple of (list of HallwaySegment objects, list of turn directions used,
+            set of open space segment indices).
 
         Raises:
             ValueError: If no collision-free path can be found after all retries.
@@ -341,12 +347,13 @@ class FloorplanGenerator:
 
         raise ValueError("Unexpected: exhausted retry loop without result.")  # pragma: no cover
 
-    def _create_hallway_segments(self) -> tuple[list[HallwaySegment], list[str]]:
+    def _create_hallway_segments(self) -> tuple[list[HallwaySegment], list[str], set[int]]:
         """
         Create hallway segments with turns.
 
         Returns:
-            A tuple of (list of HallwaySegment objects, list of turn directions used).
+            A tuple of (list of HallwaySegment objects, list of turn directions used,
+            set of open space segment indices).
             The turn directions list has length num_turns (one less than segments).
 
         """
@@ -356,21 +363,35 @@ class FloorplanGenerator:
             hallway_start_x = (
                 self.params.room_wall_length - self.params.doorway_width
             ) / 2 - self.params.hallway_end_padding
-            return (
-                [
-                    create_hallway_segment(
-                        start=(hallway_start_x, 0),
-                        direction="east",
-                        length=hallway_length,
-                        width=self.params.hallway_width,
-                    )
-                ],
-                [],
-            )
+
+            open_space_indices: set[int] = set()
+            if self.params.num_open_spaces > 0:
+                open_space_indices = {0}
+
+            if 0 in open_space_indices:
+                segment = create_open_space_segment(
+                    start=(hallway_start_x, 0),
+                    direction="east",
+                    length=hallway_length,
+                    width=self.params.hallway_width,
+                )
+            else:
+                segment = create_hallway_segment(
+                    start=(hallway_start_x, 0),
+                    direction="east",
+                    length=hallway_length,
+                    width=self.params.hallway_width,
+                )
+            return [segment], [], open_space_indices
 
         # Multi-segment layout with turns
         num_segments = self.params.num_turns + 1
         rooms_per_segment = self._calculate_rooms_per_segment(num_segments)
+
+        # Randomly select which segments become open spaces
+        open_space_indices = set()
+        if self.params.num_open_spaces > 0:
+            open_space_indices = set(random.sample(range(num_segments), self.params.num_open_spaces))
 
         # First segment starts at hallway_start_x to align with room doorways
         hallway_start_x = (
@@ -394,27 +415,39 @@ class FloorplanGenerator:
             segment_length_fn=segment_length_fn,
             turn_chooser=self._get_next_turn,
             hallway_width=self.params.hallway_width,
+            open_space_indices=open_space_indices,
         )
 
         # Convert PlannedSegments to HallwaySegments
         segments: list[HallwaySegment] = []
         for planned in planned_segments:
-            segment = create_hallway_segment(
-                start=planned.start,
-                direction=planned.direction,
-                length=planned.length,
-                width=self.params.hallway_width,
-            )
+            if planned.index in open_space_indices:
+                segment = create_open_space_segment(
+                    start=planned.start,
+                    direction=planned.direction,
+                    length=planned.length,
+                    width=self.params.hallway_width,
+                    expand_direction=planned.expand_direction,
+                )
+            else:
+                segment = create_hallway_segment(
+                    start=planned.start,
+                    direction=planned.direction,
+                    length=planned.length,
+                    width=self.params.hallway_width,
+                )
             segments.append(segment)
 
-        return segments, turn_directions_used
+        return segments, turn_directions_used, open_space_indices
 
     def _create_corner_pieces(self, segments: list[HallwaySegment]) -> list[Polygon]:
         """
         Create corner fill pieces where hallway segments meet.
 
         At each turn point, there's a gap where the two perpendicular segments
-        don't overlap. This method creates square pieces to fill those gaps.
+        don't overlap. This method creates pieces to fill those gaps. When a
+        segment is an open space, the corner spans the full perpendicular
+        extent of the open space polygon.
 
         Args:
             segments: List of hallway segments.
@@ -430,16 +463,26 @@ class FloorplanGenerator:
         half_width = self.params.hallway_width / 2
 
         for i in range(len(segments) - 1):
-            # The turn point is the end of segment i (same as start of segment i+1)
-            turn_point = segments[i].end
+            seg_i = segments[i]
+            seg_j = segments[i + 1]
 
-            # Create a square centered at the turn point
-            corner = box(
-                turn_point[0] - half_width,
-                turn_point[1] - half_width,
-                turn_point[0] + half_width,
-                turn_point[1] + half_width,
-            )
+            if not seg_i.is_open_space and not seg_j.is_open_space:
+                # Both regular: standard hw x hw square
+                turn_point = seg_i.end
+                corner = box(
+                    turn_point[0] - half_width,
+                    turn_point[1] - half_width,
+                    turn_point[0] + half_width,
+                    turn_point[1] + half_width,
+                )
+            else:
+                # At least one open space: corner spans both segments'
+                # perpendicular extents so the junction is fully connected.
+                bi = seg_i.polygon.bounds
+                bj = seg_j.polygon.bounds
+                # Use each segment's perpendicular extent for the corner
+                corner = box(bj[0], bi[1], bj[2], bi[3]) if seg_i.is_horizontal else box(bi[0], bj[1], bi[2], bj[3])
+
             corners.append(corner)
 
         return corners
@@ -615,7 +658,10 @@ class FloorplanGenerator:
         return end_skips
 
     def _place_rooms_along_segments(
-        self, segments: list[HallwaySegment], turn_directions: list[str]
+        self,
+        segments: list[HallwaySegment],
+        turn_directions: list[str],
+        open_space_indices: set[int] | None = None,
     ) -> tuple[list[Polygon], list[int]]:
         """
         Place rooms along hallway segments.
@@ -624,6 +670,7 @@ class FloorplanGenerator:
             segments: List of hallway segments.
             turn_directions: List of turn directions used between segments ("left" or "right").
                 Length is len(segments) - 1.
+            open_space_indices: Set of segment indices that are open spaces.
 
         Returns:
             A tuple of (list of room interior polygons, list of room IDs).
@@ -632,6 +679,9 @@ class FloorplanGenerator:
         rooms: list[Polygon] = []
         room_ids: list[int] = []
         room_id_counter = 0
+
+        if open_space_indices is None:
+            open_space_indices = set()
 
         # Calculate even room distribution per segment
         rooms_per_segment = self._calculate_rooms_per_segment(len(segments))
@@ -644,28 +694,34 @@ class FloorplanGenerator:
             if target_rooms_in_segment == 0:
                 continue
 
-            # Determine if there's a turn at the start of this segment
-            has_turn_at_start = seg_idx > 0
+            if seg_idx in open_space_indices:
+                # Open space: place rooms on available sides
+                segment_rooms, segment_ids = self._place_rooms_on_open_space(
+                    segment,
+                    seg_idx,
+                    segments,
+                    target_rooms_in_segment,
+                    room_id_counter,
+                )
+            else:
+                # Regular segment
+                has_turn_at_start = seg_idx > 0
+                turn_at_start_dir = turn_directions[seg_idx - 1] if has_turn_at_start else None
+                has_turn_at_end = seg_idx in end_skip_map
+                turn_at_end_dir = end_skip_map.get(seg_idx)
 
-            # Get turn direction for inside corner detection at start
-            turn_at_start_dir = turn_directions[seg_idx - 1] if has_turn_at_start else None
+                segment_rooms, segment_ids = self._place_rooms_on_segment(
+                    segment,
+                    target_rooms_in_segment,
+                    room_id_counter,
+                    has_turn_at_start=has_turn_at_start,
+                    turn_at_start_dir=turn_at_start_dir,
+                    has_turn_at_end=has_turn_at_end,
+                    turn_at_end_dir=turn_at_end_dir,
+                )
 
-            # Get end-skip info for loop closure
-            has_turn_at_end = seg_idx in end_skip_map
-            turn_at_end_dir = end_skip_map.get(seg_idx)
-
-            segment_rooms, segment_ids = self._place_rooms_on_segment(
-                segment,
-                target_rooms_in_segment,
-                room_id_counter,
-                has_turn_at_start=has_turn_at_start,
-                turn_at_start_dir=turn_at_start_dir,
-                has_turn_at_end=has_turn_at_end,
-                turn_at_end_dir=turn_at_end_dir,
-            )
             rooms.extend(segment_rooms)
             room_ids.extend(segment_ids)
-            # Track actual rooms placed for ID continuity
             room_id_counter += len(segment_rooms)
 
         return rooms, room_ids
@@ -809,6 +865,125 @@ class FloorplanGenerator:
 
         return rooms, room_ids
 
+    def _get_open_space_available_sides(
+        self,
+        seg_idx: int,
+        segments: list[HallwaySegment],
+    ) -> list[Direction]:
+        """
+        Get the sides of an open space available for room placement.
+
+        Connection sides (entry/exit to adjacent segments) are excluded.
+
+        Args:
+            seg_idx: Index of the open space segment.
+            segments: All hallway segments.
+
+        Returns:
+            List of Direction values where rooms can be placed.
+
+        """
+        segment = segments[seg_idx]
+        all_sides: set[Direction] = {"east", "west", "north", "south"}
+        connection_sides: set[Direction] = set()
+
+        # Entry side: where the previous segment connects
+        if seg_idx > 0:
+            prev_seg = segments[seg_idx - 1]
+            connection_sides.add(opposite_direction(prev_seg.direction))
+
+        # Exit side: where the next segment connects
+        if seg_idx < len(segments) - 1:
+            connection_sides.add(segment.direction)
+
+        return sorted(all_sides - connection_sides)
+
+    def _place_rooms_on_open_space(
+        self,
+        segment: HallwaySegment,
+        seg_idx: int,
+        segments: list[HallwaySegment],
+        target_rooms: int,
+        start_room_id: int,
+    ) -> tuple[list[Polygon], list[int]]:
+        """
+        Place rooms around an open space segment.
+
+        Rooms are distributed evenly across available sides (non-connection sides).
+
+        Args:
+            segment: The open space hallway segment.
+            seg_idx: Index of this segment in the segments list.
+            segments: All hallway segments.
+            target_rooms: Number of rooms to place.
+            start_room_id: Starting room ID for numbering.
+
+        Returns:
+            A tuple of (list of room polygons, list of room IDs).
+
+        """
+        rooms: list[Polygon] = []
+        room_ids: list[int] = []
+
+        available_sides = self._get_open_space_available_sides(seg_idx, segments)
+        if not available_sides or target_rooms == 0:
+            return rooms, room_ids
+
+        # Distribute rooms across available sides
+        num_sides = len(available_sides)
+        base_per_side = target_rooms // num_sides
+        remainder = target_rooms % num_sides
+        rooms_on_side = [base_per_side + (1 if i < remainder else 0) for i in range(num_sides)]
+
+        # Calculate corridor gap and room offset from edge
+        corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
+        effective_spacing = max(self.params.room_spacing, self.params.wall_thickness)
+
+        # The open space polygon bounds
+        minx, miny, maxx, maxy = segment.polygon.bounds
+        center_x = (minx + maxx) / 2
+        center_y = (miny + maxy) / 2
+
+        room_id_counter = start_room_id
+
+        for side_idx, side_dir in enumerate(available_sides):
+            num_rooms_this_side = rooms_on_side[side_idx]
+            if num_rooms_this_side == 0:
+                continue
+
+            # Room center distance from the square edge
+            room_offset = corridor_gap + self.params.room_wall_length / 2
+
+            # Calculate positions along this side
+            total_room_span = (
+                num_rooms_this_side * self.params.room_wall_length + max(0, num_rooms_this_side - 1) * effective_spacing
+            )
+            # Center the rooms along the side
+            start_offset = -total_room_span / 2 + self.params.room_wall_length / 2
+
+            for room_i in range(num_rooms_this_side):
+                along_offset = start_offset + room_i * (self.params.room_wall_length + effective_spacing)
+
+                if side_dir == "north":
+                    room_x = center_x + along_offset
+                    room_y = maxy + room_offset
+                elif side_dir == "south":
+                    room_x = center_x + along_offset
+                    room_y = miny - room_offset
+                elif side_dir == "east":
+                    room_x = maxx + room_offset
+                    room_y = center_y + along_offset
+                else:  # west
+                    room_x = minx - room_offset
+                    room_y = center_y + along_offset
+
+                room = create_room(room_x, room_y, self.params.room_wall_length)
+                rooms.append(room)
+                room_ids.append(room_id_counter)
+                room_id_counter += 1
+
+        return rooms, room_ids
+
     def _create_doors_for_segments(self, rooms: list[Polygon], segments: list[HallwaySegment]) -> list[Polygon]:
         """
         Create door openings between rooms and hallway segments.
@@ -831,19 +1006,54 @@ class FloorplanGenerator:
             # Find which segment this room is adjacent to
             segment = self._find_adjacent_segment(room, segments)
 
-            if segment.is_horizontal:
-                # Room is above or below a horizontal hallway
-                hallway_miny = segment.polygon.bounds[1]
-                hallway_maxy = segment.polygon.bounds[3]
+            seg_minx, seg_miny, seg_maxx, seg_maxy = segment.polygon.bounds
 
-                if room_miny > hallway_maxy:
-                    # Room is above hallway
-                    door_y_min = hallway_maxy
+            if segment.is_open_space:
+                # For open spaces, determine which side the room is on
+                # by comparing room center to the square's bounds
+                dx_left = abs(room_center_x - seg_minx)
+                dx_right = abs(room_center_x - seg_maxx)
+                dy_bottom = abs(room_center_y - seg_miny)
+                dy_top = abs(room_center_y - seg_maxy)
+
+                min_dist = min(dx_left, dx_right, dy_bottom, dy_top)
+
+                if min_dist in (dy_top, dy_bottom):
+                    # Room is above or below the open space
+                    if room_miny > seg_maxy:
+                        door_y_min = seg_maxy
+                        door_y_max = room_miny
+                    else:
+                        door_y_min = room_maxy
+                        door_y_max = seg_miny
+                    door = box(
+                        room_center_x - self.params.doorway_width / 2,
+                        door_y_min,
+                        room_center_x + self.params.doorway_width / 2,
+                        door_y_max,
+                    )
+                else:
+                    # Room is left or right of the open space
+                    if room_minx > seg_maxx:
+                        door_x_min = seg_maxx
+                        door_x_max = room_minx
+                    else:
+                        door_x_min = room_maxx
+                        door_x_max = seg_minx
+                    door = box(
+                        door_x_min,
+                        room_center_y - self.params.doorway_width / 2,
+                        door_x_max,
+                        room_center_y + self.params.doorway_width / 2,
+                    )
+            elif segment.is_horizontal:
+                # Room is above or below a horizontal hallway
+                if room_miny > seg_maxy:
+                    door_y_min = seg_maxy
                     door_y_max = room_miny
                 else:
-                    # Room is below hallway
                     door_y_min = room_maxy
-                    door_y_max = hallway_miny
+                    door_y_max = seg_miny
 
                 door = box(
                     room_center_x - self.params.doorway_width / 2,
@@ -853,17 +1063,12 @@ class FloorplanGenerator:
                 )
             else:
                 # Room is left or right of a vertical hallway
-                hallway_minx = segment.polygon.bounds[0]
-                hallway_maxx = segment.polygon.bounds[2]
-
-                if room_minx > hallway_maxx:
-                    # Room is to the right of hallway
-                    door_x_min = hallway_maxx
+                if room_minx > seg_maxx:
+                    door_x_min = seg_maxx
                     door_x_max = room_minx
                 else:
-                    # Room is to the left of hallway
                     door_x_min = room_maxx
-                    door_x_max = hallway_minx
+                    door_x_max = seg_minx
 
                 door = box(
                     door_x_min,
@@ -880,6 +1085,9 @@ class FloorplanGenerator:
         """
         Find which hallway segment a room is adjacent to.
 
+        For open space segments, rooms can be on any of 4 sides, so both axes
+        are checked against the square's bounds.
+
         Args:
             room: The room polygon.
             segments: List of hallway segments.
@@ -895,9 +1103,13 @@ class FloorplanGenerator:
         best_distance = float("inf")
 
         for segment in segments:
-            # Calculate distance from room center to segment centerline
-            if segment.is_horizontal:
-                # For horizontal segments, check if room x is within segment x range
+            if segment.is_open_space:
+                # For open spaces, use Shapely distance from room center to polygon
+                distance = Point(room_center_x, room_center_y).distance(segment.polygon)
+                if distance < best_distance:
+                    best_distance = distance
+                    best_segment = segment
+            elif segment.is_horizontal:
                 seg_minx = min(segment.start[0], segment.end[0])
                 seg_maxx = max(segment.start[0], segment.end[0])
                 if seg_minx <= room_center_x <= seg_maxx:
@@ -906,7 +1118,6 @@ class FloorplanGenerator:
                         best_distance = distance
                         best_segment = segment
             else:
-                # For vertical segments, check if room y is within segment y range
                 seg_miny = min(segment.start[1], segment.end[1])
                 seg_maxy = max(segment.start[1], segment.end[1])
                 if seg_miny <= room_center_y <= seg_maxy:

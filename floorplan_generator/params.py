@@ -28,6 +28,8 @@ class FloorplanParams:
             - "random": random turn direction at each turn
             - "clockwise": always turn right (clockwise)
             - "counterclockwise": always turn left (counterclockwise)
+        num_open_spaces: Number of hallway segments to convert to open spaces (squares).
+            Must be <= num_turns + 1.
         seed: Random seed for reproducible generation. When None, system entropy is used.
 
     """
@@ -42,6 +44,7 @@ class FloorplanParams:
     hallway_end_padding: float = 0.0
     num_turns: int = 0
     turn_direction: TurnDirection = "alternating"
+    num_open_spaces: int = 0
     seed: int | None = None
 
     def validate(self) -> None:
@@ -83,6 +86,14 @@ class FloorplanParams:
         # Check num_turns is non-negative
         if self.num_turns < 0:
             raise ValueError(f"num_turns must be non-negative, got {self.num_turns}")
+
+        # Check num_open_spaces
+        if self.num_open_spaces < 0:
+            raise ValueError(f"num_open_spaces must be non-negative, got {self.num_open_spaces}")
+        if self.num_open_spaces > self.num_turns + 1:
+            raise ValueError(
+                f"num_open_spaces ({self.num_open_spaces}) must be <= num_turns + 1 ({self.num_turns + 1})"
+            )
 
         # Check turn_direction is valid
         valid_turn_directions = ("alternating", "random", "clockwise", "counterclockwise")

@@ -25,6 +25,7 @@ class HallwaySegment:
     end: tuple[float, float]
     direction: Direction
     polygon: Polygon
+    is_open_space: bool = False
 
     @property
     def length(self) -> float:
@@ -275,6 +276,78 @@ def create_hallway_segment(
         polygon = box(x1 - half_width, min_y, x1 + half_width, max_y)
 
     return HallwaySegment(start=start, end=end, direction=direction, polygon=polygon)
+
+
+def opposite_direction(d: Direction) -> Direction:
+    """Return the opposite direction."""
+    opposites: dict[str, Direction] = {
+        "east": "west",
+        "west": "east",
+        "north": "south",
+        "south": "north",
+    }
+    return opposites[d]
+
+
+def create_open_space_segment(
+    start: tuple[float, float],
+    direction: Direction,
+    length: float,
+    width: float,
+    expand_direction: Direction | None = None,
+) -> HallwaySegment:
+    """
+    Create an open space segment — a square polygon offset from the centerline.
+
+    The square's side length equals the segment length. One perpendicular edge
+    aligns with the regular hallway edge (width/2 from centerline) so that
+    corners connect properly. The opposite edge extends further out so the
+    total perpendicular span equals the segment length (making it a square).
+
+    Args:
+        start: Starting point (x, y) of the segment centerline.
+        direction: Direction the segment runs.
+        length: Length of the segment (becomes the square's side length).
+        width: Hallway width — used to align the near perpendicular edge.
+        expand_direction: Which perpendicular direction gets the large expansion.
+            Must be perpendicular to ``direction``. Defaults to "left" of travel.
+
+    Returns:
+        A HallwaySegment with is_open_space=True.
+
+    """
+    if expand_direction is None:
+        expand_direction = get_perpendicular_offset_directions(direction)[0]
+
+    end = move_in_direction(start, direction, length)
+    half_width = width / 2
+    large_offset = length - half_width
+
+    x1, y1 = start
+    x2, y2 = end
+
+    if direction in ("east", "west"):
+        min_x, max_x = min(x1, x2), max(x1, x2)
+        center_y = y1
+        if expand_direction == "north":
+            polygon = box(min_x, center_y - half_width, max_x, center_y + large_offset)
+        else:
+            polygon = box(min_x, center_y - large_offset, max_x, center_y + half_width)
+    else:
+        min_y, max_y = min(y1, y2), max(y1, y2)
+        center_x = x1
+        if expand_direction == "east":
+            polygon = box(center_x - half_width, min_y, center_x + large_offset, max_y)
+        else:
+            polygon = box(center_x - large_offset, min_y, center_x + half_width, max_y)
+
+    return HallwaySegment(
+        start=start,
+        end=end,
+        direction=direction,
+        polygon=polygon,
+        is_open_space=True,
+    )
 
 
 def get_perpendicular_offset_directions(direction: Direction) -> tuple[Direction, Direction]:

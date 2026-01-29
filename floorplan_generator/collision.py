@@ -6,7 +6,13 @@ from typing import Literal
 
 from shapely.geometry import Polygon, box
 
-from floorplan_generator.geometry import Direction, move_in_direction, turn_direction
+from floorplan_generator.geometry import (
+    Direction,
+    get_perpendicular_offset_directions,
+    move_in_direction,
+    opposite_direction,
+    turn_direction,
+)
 
 
 class CollisionError(Exception):
@@ -22,19 +28,46 @@ class PlannedSegment:
     end: tuple[float, float]
     direction: Direction
     length: float
+    is_open_space: bool = False
+    side_length: float = 0.0
+    expand_direction: Direction | None = None
 
     def bounding_polygon(self, hallway_width: float) -> Polygon:
-        """Build the Shapely box for this segment (same logic as create_hallway_segment)."""
+        """
+        Build the Shapely box for this segment.
+
+        For regular segments, produces a symmetric hallway-width rectangle.
+        For open space segments with a known expand_direction, produces the
+        asymmetric polygon matching ``create_open_space_segment()``.
+        """
         half_width = hallway_width / 2
         x1, y1 = self.start
         x2, y2 = self.end
 
+        if not self.is_open_space or self.expand_direction is None:
+            if self.direction in ("east", "west"):
+                min_x, max_x = min(x1, x2), max(x1, x2)
+                return box(min_x, y1 - half_width, max_x, y1 + half_width)
+            else:
+                min_y, max_y = min(y1, y2), max(y1, y2)
+                return box(x1 - half_width, min_y, x1 + half_width, max_y)
+
+        large_offset = self.length - half_width
+
         if self.direction in ("east", "west"):
             min_x, max_x = min(x1, x2), max(x1, x2)
-            return box(min_x, y1 - half_width, max_x, y1 + half_width)
+            center_y = y1
+            if self.expand_direction == "north":
+                return box(min_x, center_y - half_width, max_x, center_y + large_offset)
+            else:
+                return box(min_x, center_y - large_offset, max_x, center_y + half_width)
         else:
             min_y, max_y = min(y1, y2), max(y1, y2)
-            return box(x1 - half_width, min_y, x1 + half_width, max_y)
+            center_x = x1
+            if self.expand_direction == "east":
+                return box(center_x - half_width, min_y, center_x + large_offset, max_y)
+            else:
+                return box(center_x - large_offset, min_y, center_x + half_width, max_y)
 
 
 class CollisionChecker:
@@ -85,6 +118,62 @@ class CollisionChecker:
         return False
 
 
+def _compute_expand_direction(
+    seg_direction: Direction,
+    adjacent_direction: Direction,
+) -> Direction:
+    """
+    Compute expand direction: away from an adjacent segment's body.
+
+    The adjacent segment's body extends in ``adjacent_direction`` from the
+    junction. We expand to the perpendicular side of ``seg_direction`` that
+    is farthest from that body.
+    """
+    left_dir, right_dir = get_perpendicular_offset_directions(seg_direction)
+    body_side = opposite_direction(adjacent_direction)
+    if body_side == left_dir:
+        return right_dir
+    return left_dir
+
+
+def _compute_attachment_offset(
+    prev_segment: "PlannedSegment",
+    next_direction: Direction,
+    hallway_width: float,
+) -> tuple[float, float]:
+    """
+    Compute the perpendicular offset for the next segment's start position.
+
+    After an open space, the next segment starts at the attachment point on the
+    exit face closest to the next segment's travel direction.  The next segment
+    always turns 90° so ``next_direction`` is perpendicular to the open space.
+
+    Returns an (dx, dy) offset to add to the centerline end position.
+    """
+    if not prev_segment.is_open_space or prev_segment.expand_direction is None:
+        return (0.0, 0.0)
+
+    half_width = hallway_width / 2
+    large_offset = prev_segment.length - half_width
+
+    if next_direction == prev_segment.expand_direction:
+        offset_amount = large_offset
+    else:
+        offset_amount = half_width
+
+    dx, dy = 0.0, 0.0
+    if next_direction == "north":
+        dy = offset_amount
+    elif next_direction == "south":
+        dy = -offset_amount
+    elif next_direction == "east":
+        dx = offset_amount
+    elif next_direction == "west":
+        dx = -offset_amount
+
+    return (dx, dy)
+
+
 def plan_path(
     start_pos: tuple[float, float],
     start_direction: Direction,
@@ -93,6 +182,7 @@ def plan_path(
     turn_chooser: Callable[[int], str],
     hallway_width: float,
     allowed_connections: set[tuple[int, int]] | None = None,
+    open_space_indices: set[int] | None = None,
 ) -> tuple[list[PlannedSegment], list[str]]:
     """
     Plan a collision-free hallway path using backtracking.
@@ -105,6 +195,7 @@ def plan_path(
         turn_chooser: Callable(turn_index) -> "left" or "right" (initial choice).
         hallway_width: Width of the hallway corridor.
         allowed_connections: Set of (i, j) segment index pairs allowed to overlap.
+        open_space_indices: Segment indices that will become open spaces.
 
     Returns:
         A tuple of (list of PlannedSegments, list of turn directions used).
@@ -114,6 +205,7 @@ def plan_path(
 
     """
     checker = CollisionChecker(hallway_width, allowed_connections)
+    os_indices = open_space_indices or set()
 
     # Each level of the stack: (seg_index, tried_turns)
     # tried_turns tracks which turn choices have been attempted at this level
@@ -172,17 +264,34 @@ def plan_path(
             direction = turn_direction(prev_segment.direction, turn_lr)
             turn_at_start_dir = chosen_turn
 
+            # Shift start position if previous segment is an open space
+            dx, dy = _compute_attachment_offset(prev_segment, direction, hallway_width)
+            pos = (pos[0] + dx, pos[1] + dy)
+
         # Calculate length and build planned segment
         length = segment_length_fn(seg_idx, turn_at_start_dir if seg_idx > 0 else None)
         end = move_in_direction(pos, direction, length)
 
+        is_open = seg_idx in os_indices
         planned = PlannedSegment(
             index=seg_idx,
             start=pos,
             end=end,
             direction=direction,
             length=length,
+            is_open_space=is_open,
+            side_length=length if is_open else 0.0,
         )
+
+        # Compute expand direction for open space segments
+        if is_open:
+            if seg_idx > 0:
+                planned.expand_direction = _compute_expand_direction(
+                    direction, segments[-1].direction
+                )
+            else:
+                # First segment: nothing to collide with, default to left of travel
+                planned.expand_direction = get_perpendicular_offset_directions(direction)[0]
 
         # Check collision against existing segments
         if checker.check_segment(planned, segments):
