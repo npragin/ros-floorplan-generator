@@ -434,9 +434,22 @@ class FloorplanGenerator:
         num_segments = self.params.num_turns + 1
 
         # Randomly select which segments become open spaces
+        # Ensure no two adjacent segments are selected
         open_space_indices = set()
         if self.params.num_open_spaces > 0:
-            open_space_indices = set(random.sample(range(num_segments), self.params.num_open_spaces))
+            available = list(range(num_segments))
+            while len(open_space_indices) < self.params.num_open_spaces:
+                # Randomly select from available indices
+                idx = random.choice(available)
+                open_space_indices.add(idx)
+
+                # Remove selected index and its neighbors from available
+                available.remove(idx)
+                if idx > 0 and idx - 1 in available:
+                    available.remove(idx - 1)
+                if idx < num_segments - 1 and idx + 1 in available:
+                    available.remove(idx + 1)
+        print(open_space_indices)
 
         rooms_per_segment = self._calculate_rooms_per_segment(num_segments, open_space_indices)
 
