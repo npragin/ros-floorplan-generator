@@ -118,36 +118,36 @@ class FloorplanGenerator:
                 ),
             )
 
+        # Compute extra fill pieces for open-space corners and merge into segments
+        corner_fills_by_seg, corner_subs_by_seg = self._extend_open_spaces_at_corners(segments)
+        all_corner_fills: list[Polygon] = []
+        for seg_idx, seg_fills in corner_fills_by_seg.items():
+            for fill in seg_fills:
+                all_corner_fills.append(fill)
+                segments[seg_idx].polygon = cast(Polygon, unary_union([segments[seg_idx].polygon, fill]))
+
+        for seg_idx, seg_subs in corner_subs_by_seg.items():
+            for sub in seg_subs:
+                segments[seg_idx].polygon = cast(Polygon, segments[seg_idx].polygon.difference(sub))
+
+        if debug_dir:
+            self._render_step(
+                Path(debug_dir) / "02_final_segments.png",
+                hallway=cast(
+                    Polygon | MultiPolygon,
+                    unary_union([seg.polygon for seg in segments]),
+                ),
+            )
+
         # Create corner fill pieces where segments meet
         corner_pieces = self._create_corner_pieces(segments)
 
         if debug_dir:
             self._render_step(
-                Path(debug_dir) / "02_segments_and_corners.png",
+                Path(debug_dir) / "03_segments_and_corners.png",
                 hallway=cast(
                     Polygon | MultiPolygon,
                     unary_union([seg.polygon for seg in segments] + corner_pieces),
-                ),
-            )
-
-            # Compute extra fill pieces for open-space corners and merge into segments
-            corner_fills_by_seg, corner_subs_by_seg = self._extend_open_spaces_at_corners(segments)
-            all_corner_fills: list[Polygon] = []
-            for seg_idx, seg_fills in corner_fills_by_seg.items():
-                for fill in seg_fills:
-                    all_corner_fills.append(fill)
-                    segments[seg_idx].polygon = cast(Polygon, unary_union([segments[seg_idx].polygon, fill]))
-
-            for seg_idx, seg_subs in corner_subs_by_seg.items():
-                for sub in seg_subs:
-                    segments[seg_idx].polygon = cast(Polygon, segments[seg_idx].polygon.difference(sub))
-
-        if debug_dir:
-            self._render_step(
-                Path(debug_dir) / "03_final_segments.png",
-                hallway=cast(
-                    Polygon | MultiPolygon,
-                    unary_union([seg.polygon for seg in segments]),
                 ),
             )
 
@@ -522,10 +522,14 @@ class FloorplanGenerator:
 
     def _create_corner_pieces(self, segments: list[HallwaySegment]) -> list[Polygon]:
         """
-        Create corner fill pieces where hallway segments meet.
+        Create corner fill pieces where hallway segments meet and at open space corners.
 
         At each turn point, there's a gap where the two perpendicular segments
         don't overlap. This method creates small square pieces to fill those gaps.
+
+        For open space segments, four corner pieces are created at each corner
+        of the open space rectangle to fill the gaps between room rows on
+        perpendicular sides.
 
         Args:
             segments: List of hallway segments.
@@ -534,11 +538,9 @@ class FloorplanGenerator:
             List of corner fill polygons.
 
         """
-        if len(segments) <= 1:
-            return []
-
         corners: list[Polygon] = []
-        half_width = self.params.hallway_width / 2
+        width = self.params.hallway_width
+        half_width = width / 2
 
         for i in range(len(segments) - 1):
             seg_i = segments[i]
@@ -553,6 +555,21 @@ class FloorplanGenerator:
             )
 
             corners.append(corner)
+
+        # Add four corner pieces for each open space segment
+        for seg in segments:
+            if not seg.is_open_space:
+                continue
+
+            minx, miny, maxx, maxy = seg.polygon.bounds
+            corners.extend(
+                [
+                    box(minx, miny, minx + width, miny + width),
+                    box(minx, maxy - width, minx + width, maxy),
+                    box(maxx - width, maxy - width, maxx, maxy),
+                    box(maxx - width, miny, maxx, miny + width),
+                ]
+            )
 
         return corners
 
