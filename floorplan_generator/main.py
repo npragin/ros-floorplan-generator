@@ -180,7 +180,7 @@ def generate(
         int | None,
         typer.Option(
             "--num-open-spaces",
-            help="Number of hallway segments to convert to open spaces. Must be <= num_turns + 1.",
+            help="Number of hallway segments to convert to open spaces. Must be <= (num_turns + 1) / 2.",
             show_default=str(DEFAULTS["num_open_spaces"]),
         ),
     ] = None,
@@ -285,6 +285,14 @@ def generate(
     # Validate required parameters
     if resolved_num_rooms is None:
         raise typer.BadParameter("num_rooms is required. Provide it via --num-rooms/-n or in a config file.")
+
+    # Validate num_open_spaces constraint
+    max_open_spaces = (resolved_num_turns + 1) // 2
+    if resolved_num_open_spaces > max_open_spaces:
+        raise typer.BadParameter(
+            f"num_open_spaces ({resolved_num_open_spaces}) must be <= (num_turns + 1) / 2 "
+            f"({max_open_spaces} with {resolved_num_turns} turns)"
+        )
 
     # Handle seed: auto-generate if not provided, then seed the RNG once here
     seed_was_provided = resolved_seed is not None
