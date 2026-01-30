@@ -115,7 +115,7 @@ class FloorplanParams:
             The minimum segment length in meters.
 
         """
-        return self.room_wall_length + 2 * self.effective_doorway_length
+        return self.room_wall_length + self.effective_doorway_length
 
     @property
     def effective_doorway_length(self) -> float:
