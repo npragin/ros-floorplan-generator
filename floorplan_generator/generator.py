@@ -633,9 +633,7 @@ class FloorplanGenerator:
             # inward-facing boxes at each corner to trim the open space.
             hw = 2 * half_width  # full hallway width (box side length)
 
-            def _dead_end_corners(
-                seg: HallwaySegment, dead_end_side: Direction, hw: float = hw
-            ) -> list[Polygon]:
+            def _dead_end_corners(seg: HallwaySegment, dead_end_side: Direction, hw: float = hw) -> list[Polygon]:
                 """Create two corner boxes at the dead-end edge of a terminal open space."""
                 minx, miny, maxx, maxy = seg.polygon.bounds
                 if dead_end_side == "west":
