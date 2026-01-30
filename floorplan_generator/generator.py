@@ -131,14 +131,16 @@ class FloorplanGenerator:
             )
 
             # Compute extra fill pieces for open-space corners and merge into segments
-            corner_fills_by_seg = self._extend_open_spaces_at_corners(segments)
+            corner_fills_by_seg, corner_subs_by_seg = self._extend_open_spaces_at_corners(segments)
             all_corner_fills: list[Polygon] = []
             for seg_idx, seg_fills in corner_fills_by_seg.items():
                 for fill in seg_fills:
                     all_corner_fills.append(fill)
                     segments[seg_idx].polygon = cast(Polygon, unary_union([segments[seg_idx].polygon, fill]))
 
-                print(segments[seg_idx].polygon.bounds)
+            for seg_idx, seg_subs in corner_subs_by_seg.items():
+                for sub in seg_subs:
+                    segments[seg_idx].polygon = cast(Polygon, segments[seg_idx].polygon.difference(sub))
 
         if debug_dir:
             self._render_step(
@@ -554,26 +556,34 @@ class FloorplanGenerator:
 
         return corners
 
-    def _extend_open_spaces_at_corners(self, segments: list[HallwaySegment]) -> dict[int, list[Polygon]]:
+    def _extend_open_spaces_at_corners(
+        self, segments: list[HallwaySegment]
+    ) -> tuple[dict[int, list[Polygon]], dict[int, list[Polygon]]]:
         """
-        Compute fill pieces for open-space corners that the small square corners don't cover.
+        Compute fill and subtraction pieces for open-space corners.
 
         When an open space connects to another segment, the junction needs a
         larger fill than the hallway_width square corner. This method computes
         the difference between the old full-extent corner and the new small
         corner, keyed by the segment index that should absorb each fill.
 
+        For terminal open spaces (first or last segment), mirrored corner
+        pieces are returned as subtractions to trim the dead-end side.
+
         Args:
             segments: List of hallway segments.
 
         Returns:
-            Dict mapping segment index to list of fill polygons for that segment.
+            A tuple of two dicts:
+            - fills: segment index -> list of fill polygons to union into that segment.
+            - subtractions: segment index -> list of polygons to subtract from that segment.
 
         """
         if len(segments) <= 1:
-            return {}
+            return {}, {}
 
         fills: dict[int, list[Polygon]] = {}
+        subtractions: dict[int, list[Polygon]] = {}
         half_width = self.params.hallway_width / 2
 
         for i in range(len(segments) - 1):
@@ -617,7 +627,52 @@ class FloorplanGenerator:
             owner = (i + 1) if seg_j.is_open_space else i
             fills.setdefault(owner, []).append(cast(Polygon, remainder))
 
-        return fills
+            # Build subtraction boxes at dead-end corners of terminal open spaces.
+            # The small corners sit outside the segment at the junction edge.
+            # At the dead-end edge (no adjacent segment), we create matching
+            # inward-facing boxes at each corner to trim the open space.
+            hw = 2 * half_width  # full hallway width (box side length)
+
+            def _dead_end_corners(
+                seg: HallwaySegment, dead_end_side: Direction, hw: float = hw
+            ) -> list[Polygon]:
+                """Create two corner boxes at the dead-end edge of a terminal open space."""
+                minx, miny, maxx, maxy = seg.polygon.bounds
+                if dead_end_side == "west":
+                    return [
+                        box(minx, miny, minx + hw, miny + hw),
+                        box(minx, maxy - hw, minx + hw, maxy),
+                    ]
+                elif dead_end_side == "east":
+                    return [
+                        box(maxx - hw, miny, maxx, miny + hw),
+                        box(maxx - hw, maxy - hw, maxx, maxy),
+                    ]
+                elif dead_end_side == "south":
+                    return [
+                        box(minx, miny, minx + hw, miny + hw),
+                        box(maxx - hw, miny, maxx, miny + hw),
+                    ]
+                else:  # north
+                    return [
+                        box(minx, maxy - hw, minx + hw, maxy),
+                        box(maxx - hw, maxy - hw, maxx, maxy),
+                    ]
+
+            # If seg_i is the first segment and is an open space:
+            # dead end is opposite the travel direction (at the start side)
+            if i == 0 and seg_i.is_open_space:
+                dead_side = opposite_direction(seg_i.direction)
+                dead_corners = _dead_end_corners(seg_i, dead_side)
+                subtractions.setdefault(0, []).extend(dead_corners)
+
+            # If seg_j is the last segment and is an open space:
+            # dead end is in the travel direction (at the end side)
+            if i + 1 == len(segments) - 1 and seg_j.is_open_space:
+                dead_corners = _dead_end_corners(seg_j, seg_j.direction)
+                subtractions.setdefault(i + 1, []).extend(dead_corners)
+
+        return fills, subtractions
 
     def _get_next_turn(self, turn_index: int) -> str:
         """
