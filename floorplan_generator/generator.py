@@ -451,6 +451,7 @@ class FloorplanGenerator:
             turn_at_end_dir: str | None,
         ) -> float | tuple[float, float]:
             target_rooms = rooms_per_segment[seg_idx]
+            is_end_segment = seg_idx == 0 or seg_idx == num_segments - 1
 
             if seg_idx in open_space_indices:
                 num_available_sides = self._get_num_available_sides(seg_idx, num_segments)
@@ -471,8 +472,8 @@ class FloorplanGenerator:
                     target_rooms, num_available_sides, connection_sides, direction
                 )
                 return (
-                    max(along_length, self.params.min_segment_length),
-                    max(perp_length, self.params.min_segment_length),
+                    max(along_length, self.params.min_segment_length(is_end_segment)),
+                    max(perp_length, self.params.min_segment_length(is_end_segment)),
                 )
             else:
                 has_turn_at_start = seg_idx > 0
@@ -481,7 +482,7 @@ class FloorplanGenerator:
                     target_rooms, has_turn_at_start, has_turn_at_end, turn_at_start_dir
                 )
 
-            return max(length, self.params.min_segment_length)
+            return max(length, self.params.min_segment_length(is_end_segment))
 
         # Use plan_path with backtracking for collision-free layout
         planned_segments, turn_directions_used = plan_path(
@@ -812,7 +813,7 @@ class FloorplanGenerator:
 
         """
         if target_rooms == 0:
-            return self.params.min_segment_length
+            return self.params.min_segment_length(False)
 
         # Calculate turn buffer (space needed around corners)
         corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
@@ -837,7 +838,8 @@ class FloorplanGenerator:
         if has_turn_at_end:
             length += corridor_gap
 
-        return max(length, self.params.min_segment_length)
+        is_end_segment = not (has_turn_at_start and has_turn_at_end)
+        return max(length, self.params.min_segment_length(is_end_segment))
 
     def _detect_loop_end_skips(self, segments: list[HallwaySegment]) -> dict[int, str]:
         """
@@ -1178,7 +1180,7 @@ class FloorplanGenerator:
 
         """
         if target_rooms == 0 or num_available_sides == 0:
-            return self.params.min_segment_length, self.params.min_segment_length
+            return self.params.min_segment_length(False), self.params.min_segment_length(False)
 
         # Distribute rooms across sides (same logic as _place_rooms_on_open_space)
         base_per_side = target_rooms // num_available_sides
@@ -1214,12 +1216,13 @@ class FloorplanGenerator:
                     along_extra += corridor_gap
                     perp_extra += self.params.hallway_width + corridor_gap
 
-        if len(connection_sides) == 1:
+        is_end_segment = len(connection_sides) == 1
+        if is_end_segment:
             along_extra += self.params.hallway_width + corridor_gap
             perp_extra += self.params.hallway_width + corridor_gap
 
-        along_length = max(base_length + along_extra, self.params.min_segment_length)
-        perp_length = max(base_length + perp_extra, self.params.min_segment_length)
+        along_length = max(base_length + along_extra, self.params.min_segment_length(is_end_segment))
+        perp_length = max(base_length + perp_extra, self.params.min_segment_length(is_end_segment))
 
         return along_length, perp_length
 

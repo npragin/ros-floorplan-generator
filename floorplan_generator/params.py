@@ -101,8 +101,7 @@ class FloorplanParams:
         if self.turn_direction not in valid_turn_directions:
             raise ValueError(f"turn_direction must be one of {valid_turn_directions}, got '{self.turn_direction}'")
 
-    @property
-    def min_segment_length(self) -> float:
+    def min_segment_length(self, is_end_segment: bool) -> float:
         """
         Get the minimum segment length based on room dimensions.
 
@@ -115,7 +114,10 @@ class FloorplanParams:
             The minimum segment length in meters.
 
         """
-        return self.room_wall_length + self.effective_doorway_length
+        if is_end_segment:
+            return self.room_wall_length + self.effective_doorway_length
+        else:
+            return self.room_wall_length + self.effective_doorway_length * 2
 
     @property
     def effective_doorway_length(self) -> float:
