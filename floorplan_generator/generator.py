@@ -111,7 +111,7 @@ class FloorplanGenerator:
 
         if debug_dir:
             self._render_step(
-                Path(debug_dir) / "00_segments.png",
+                Path(debug_dir) / "01_prelim_segments.png",
                 hallway=cast(
                     Polygon | MultiPolygon,
                     unary_union([seg.polygon for seg in segments]),
@@ -121,7 +121,35 @@ class FloorplanGenerator:
         # Create corner fill pieces where segments meet
         corner_pieces = self._create_corner_pieces(segments)
 
-        # Combine segments and corners into hallway interior
+        if debug_dir:
+            self._render_step(
+                Path(debug_dir) / "02_segments_and_corners.png",
+                hallway=cast(
+                    Polygon | MultiPolygon,
+                    unary_union([seg.polygon for seg in segments] + corner_pieces),
+                ),
+            )
+
+            # Compute extra fill pieces for open-space corners and merge into segments
+            corner_fills_by_seg = self._extend_open_spaces_at_corners(segments)
+            all_corner_fills: list[Polygon] = []
+            for seg_idx, seg_fills in corner_fills_by_seg.items():
+                for fill in seg_fills:
+                    all_corner_fills.append(fill)
+                    segments[seg_idx].polygon = cast(Polygon, unary_union([segments[seg_idx].polygon, fill]))
+
+                print(segments[seg_idx].polygon.bounds)
+
+        if debug_dir:
+            self._render_step(
+                Path(debug_dir) / "03_final_segments.png",
+                hallway=cast(
+                    Polygon | MultiPolygon,
+                    unary_union([seg.polygon for seg in segments]),
+                ),
+            )
+
+        # Combine segments, corners, and open-space fills into hallway interior
         hallway_interior = cast(
             Polygon | MultiPolygon,
             unary_union([seg.polygon for seg in segments] + corner_pieces),
@@ -129,7 +157,7 @@ class FloorplanGenerator:
 
         if debug_dir:
             self._render_step(
-                Path(debug_dir) / "01_hallway.png",
+                Path(debug_dir) / "04_hallway.png",
                 hallway=hallway_interior,
             )
 
@@ -137,7 +165,7 @@ class FloorplanGenerator:
 
         if debug_dir:
             self._render_step(
-                Path(debug_dir) / "02_hallway_and_rooms.png",
+                Path(debug_dir) / "05_hallway_and_rooms.png",
                 hallway=hallway_interior,
                 rooms=room_interiors,
             )
@@ -146,7 +174,7 @@ class FloorplanGenerator:
 
         if debug_dir:
             self._render_step(
-                Path(debug_dir) / "03_with_doors.png",
+                Path(debug_dir) / "06_with_doors.png",
                 hallway=hallway_interior,
                 rooms=room_interiors,
                 doors=doors,
@@ -156,7 +184,7 @@ class FloorplanGenerator:
 
         if debug_dir:
             self._render_step(
-                Path(debug_dir) / "04_with_walls.png",
+                Path(debug_dir) / "07_with_walls.png",
                 hallway=hallway_interior,
                 rooms=room_interiors,
                 doors=doors,
@@ -495,9 +523,7 @@ class FloorplanGenerator:
         Create corner fill pieces where hallway segments meet.
 
         At each turn point, there's a gap where the two perpendicular segments
-        don't overlap. This method creates pieces to fill those gaps. When a
-        segment is an open space, the corner spans the full perpendicular
-        extent of the open space polygon.
+        don't overlap. This method creates small square pieces to fill those gaps.
 
         Args:
             segments: List of hallway segments.
@@ -514,28 +540,84 @@ class FloorplanGenerator:
 
         for i in range(len(segments) - 1):
             seg_i = segments[i]
-            seg_j = segments[i + 1]
 
-            if not seg_i.is_open_space and not seg_j.is_open_space:
-                # Square corner piece just past the end of seg_i
-                corner_center = move_in_direction(seg_i.end, seg_i.direction, half_width)
-                corner = box(
-                    corner_center[0] - half_width,
-                    corner_center[1] - half_width,
-                    corner_center[0] + half_width,
-                    corner_center[1] + half_width,
-                )
-            else:
-                # At least one open space: corner spans both segments'
-                # perpendicular extents so the junction is fully connected.
-                bi = seg_i.polygon.bounds
-                bj = seg_j.polygon.bounds
-                # Use each segment's perpendicular extent for the corner
-                corner = box(bj[0], bi[1], bj[2], bi[3]) if seg_i.is_horizontal else box(bi[0], bj[1], bi[2], bj[3])
+            # Square corner piece just past the end of seg_i
+            corner_center = move_in_direction(seg_i.end, seg_i.direction, half_width)
+            corner = box(
+                corner_center[0] - half_width,
+                corner_center[1] - half_width,
+                corner_center[0] + half_width,
+                corner_center[1] + half_width,
+            )
 
             corners.append(corner)
 
         return corners
+
+    def _extend_open_spaces_at_corners(self, segments: list[HallwaySegment]) -> dict[int, list[Polygon]]:
+        """
+        Compute fill pieces for open-space corners that the small square corners don't cover.
+
+        When an open space connects to another segment, the junction needs a
+        larger fill than the hallway_width square corner. This method computes
+        the difference between the old full-extent corner and the new small
+        corner, keyed by the segment index that should absorb each fill.
+
+        Args:
+            segments: List of hallway segments.
+
+        Returns:
+            Dict mapping segment index to list of fill polygons for that segment.
+
+        """
+        if len(segments) <= 1:
+            return {}
+
+        fills: dict[int, list[Polygon]] = {}
+        half_width = self.params.hallway_width / 2
+
+        for i in range(len(segments) - 1):
+            seg_i = segments[i]
+            seg_j = segments[i + 1]
+
+            if not seg_i.is_open_space and not seg_j.is_open_space:
+                continue
+
+            # Compute the old large corner rectangle (bounds-based formula)
+            bi = seg_i.polygon.bounds
+            bj = seg_j.polygon.bounds
+            old_corner = box(bj[0], bi[1], bj[2], bi[3]) if seg_i.is_horizontal else box(bi[0], bj[1], bi[2], bj[3])
+
+            # Compute the small square corners at both ends of the long rectangle
+            corner_center = move_in_direction(seg_i.end, seg_i.direction, half_width)
+            small_corner = box(
+                corner_center[0] - half_width,
+                corner_center[1] - half_width,
+                corner_center[0] + half_width,
+                corner_center[1] + half_width,
+            )
+
+            # Second small corner at the opposite end of the old_corner rectangle
+            oc = old_corner.bounds
+            other_center = (oc[0] + oc[2] - corner_center[0], oc[1] + oc[3] - corner_center[1])
+            small_corner_far = box(
+                other_center[0] - half_width,
+                other_center[1] - half_width,
+                other_center[0] + half_width,
+                other_center[1] + half_width,
+            )
+
+            # The remainder is the area that the old corner covered but the
+            # small corners do not
+            remainder = old_corner.difference(small_corner).difference(small_corner_far)
+            if remainder.is_empty:
+                continue
+
+            # Assign to the open space segment; prefer seg_j, fall back to seg_i
+            owner = (i + 1) if seg_j.is_open_space else i
+            fills.setdefault(owner, []).append(cast(Polygon, remainder))
+
+        return fills
 
     def _get_next_turn(self, turn_index: int) -> str:
         """
@@ -1046,19 +1128,28 @@ class FloorplanGenerator:
         corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
 
         # Determine which axis is "along" vs "perpendicular" to the segment direction
+        # Add space for a wall and hallway on the connection sides
         along_extra = 0.0
         perp_extra = 0.0
         for connection_side in connection_sides:
             if segment_direction in ("east", "west"):
                 if connection_side in ("east", "west"):
                     perp_extra += corridor_gap
+                    along_extra += self.params.hallway_width + corridor_gap
                 else:
                     along_extra += corridor_gap
+                    perp_extra += self.params.hallway_width + corridor_gap
             else:
                 if connection_side in ("north", "south"):
                     perp_extra += corridor_gap
+                    along_extra += self.params.hallway_width + corridor_gap
                 else:
                     along_extra += corridor_gap
+                    perp_extra += self.params.hallway_width + corridor_gap
+
+        if len(connection_sides) == 1:
+            along_extra += self.params.hallway_width + corridor_gap
+            perp_extra += self.params.hallway_width + corridor_gap
 
         along_length = max(base_length + along_extra, self.params.min_segment_length)
         perp_length = max(base_length + perp_extra, self.params.min_segment_length)
