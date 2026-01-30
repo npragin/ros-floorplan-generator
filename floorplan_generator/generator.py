@@ -15,7 +15,6 @@ from floorplan_generator.geometry import (
     create_hallway_segment,
     create_open_space_segment,
     create_room,
-    create_wall_ring,
     get_perpendicular_offset_directions,
     move_in_direction,
     opposite_direction,
@@ -142,15 +141,6 @@ class FloorplanGenerator:
         # Create corner fill pieces where segments meet
         corner_pieces = self._create_corner_pieces(segments)
 
-        if debug_dir:
-            self._render_step(
-                Path(debug_dir) / "03_segments_and_corners.png",
-                hallway=cast(
-                    Polygon | MultiPolygon,
-                    unary_union([seg.polygon for seg in segments] + corner_pieces),
-                ),
-            )
-
         # Combine segments, corners, and open-space fills into hallway interior
         hallway_interior = cast(
             Polygon | MultiPolygon,
@@ -159,7 +149,7 @@ class FloorplanGenerator:
 
         if debug_dir:
             self._render_step(
-                Path(debug_dir) / "04_hallway.png",
+                Path(debug_dir) / "03_hallway.png",
                 hallway=hallway_interior,
             )
 
@@ -167,7 +157,7 @@ class FloorplanGenerator:
 
         if debug_dir:
             self._render_step(
-                Path(debug_dir) / "05_hallway_and_rooms.png",
+                Path(debug_dir) / "04_hallway_and_rooms.png",
                 hallway=hallway_interior,
                 rooms=room_interiors,
             )
@@ -176,7 +166,7 @@ class FloorplanGenerator:
 
         if debug_dir:
             self._render_step(
-                Path(debug_dir) / "06_with_doors.png",
+                Path(debug_dir) / "05_with_doors.png",
                 hallway=hallway_interior,
                 rooms=room_interiors,
                 doors=doors,
@@ -186,7 +176,7 @@ class FloorplanGenerator:
 
         if debug_dir:
             self._render_step(
-                Path(debug_dir) / "07_with_walls.png",
+                Path(debug_dir) / "06_with_walls.png",
                 hallway=hallway_interior,
                 rooms=room_interiors,
                 doors=doors,
@@ -283,7 +273,6 @@ class FloorplanGenerator:
                         draw.polygon(exterior_coords, fill=fill)
                         for interior in geom.interiors:
                             hole_coords = ring_to_pixel_coords(interior)
-                            print(interior.bounds)
                             draw.polygon(hole_coords, fill=hole_fill)
             elif isinstance(polygon, Polygon):
                 exterior_coords = ring_to_pixel_coords(polygon.exterior)
@@ -1524,12 +1513,18 @@ class FloorplanGenerator:
             A Polygon representing all walls.
 
         """
-        # Create the combined free space (rooms + hallway + door corridors)
-        # This represents all navigable area as a single unified geometry
+        # Buffer each piece individually so interior boundaries are preserved.
+        # Buffering the union would lose walls between rooms and hallway.
+        wt = self.params.wall_thickness
+        buffered_pieces = [hallway_interior.buffer(wt, join_style="mitre")]
+        for room in room_interiors:
+            buffered_pieces.append(room.buffer(wt, join_style="mitre"))
+        all_buffered = unary_union(buffered_pieces)
+
+        # Free space = hallway + rooms + doors (doors cut through interior walls)
         free_space = unary_union([hallway_interior, *room_interiors, *doors])
 
-        # Create a single wall ring around the entire free space
-        # This naturally handles shared walls between adjacent rooms, doors, and connections
-        all_walls = create_wall_ring(free_space, self.params.wall_thickness)
+        # Walls = buffered area minus free space
+        all_walls = all_buffered.difference(free_space)
 
         return all_walls

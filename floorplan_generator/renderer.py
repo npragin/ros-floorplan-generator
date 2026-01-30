@@ -83,18 +83,6 @@ class FloorplanRenderer:
         elif isinstance(floorplan.walls, Polygon):
             draw_polygon_with_holes(floorplan.walls, fill=0, hole_fill=255)
 
-        # Draw free space (rooms and hallway interiors) as white
-        # This ensures the interior is white even if walls overlap
-        free_space = floorplan.get_free_space()
-        if isinstance(free_space, MultiPolygon):
-            for geom in free_space.geoms:
-                if isinstance(geom, Polygon):
-                    exterior_coords = ring_to_pixel_coords(geom.exterior)
-                    draw.polygon(exterior_coords, fill=255)
-        elif isinstance(free_space, Polygon):
-            exterior_coords = ring_to_pixel_coords(free_space.exterior)
-            draw.polygon(exterior_coords, fill=255)
-
         # Save the image
         image.save(output_path)
 
@@ -148,7 +136,25 @@ class FloorplanRenderer:
                 hole_coords = ring_to_pixel_coords(interior)
                 draw.polygon(hole_coords, fill=hole_fill)
 
-        # Draw walls first (dark gray), with holes as background color
+        image.save(output_path.parent / (output_path.stem + "_walls.png"))
+
+        # Draw hallway interior (light blue), excluding wall regions
+        hallway_visible = floorplan.hallway_interior.difference(floorplan.walls)
+        if isinstance(hallway_visible, MultiPolygon):
+            for geom in hallway_visible.geoms:
+                print(geom.bounds)
+                if isinstance(geom, Polygon):
+                    exterior_coords = ring_to_pixel_coords(geom.exterior)
+                    draw.polygon(exterior_coords, fill=(200, 220, 255))
+        elif isinstance(hallway_visible, Polygon):
+            exterior_coords = ring_to_pixel_coords(hallway_visible.exterior)
+            draw.polygon(exterior_coords, fill=(200, 220, 255))
+
+        image.save(output_path.parent / (output_path.stem + "_hallway.png"))
+
+        # Draw walls (dark gray), with holes as background color.
+        # Since walls = buffered - free_space, walls and free space are disjoint,
+        # so drawing colored components on top only fills inside the holes.
         bg_color = (240, 240, 240)
         if isinstance(floorplan.walls, MultiPolygon):
             for geom in floorplan.walls.geoms:
@@ -156,11 +162,6 @@ class FloorplanRenderer:
                     draw_polygon_with_holes(geom, fill=(60, 60, 60), hole_fill=bg_color)
         elif isinstance(floorplan.walls, Polygon):
             draw_polygon_with_holes(floorplan.walls, fill=(60, 60, 60), hole_fill=bg_color)
-
-        # Draw hallway interior (light blue)
-        if isinstance(floorplan.hallway_interior, Polygon):
-            exterior_coords = ring_to_pixel_coords(floorplan.hallway_interior.exterior)
-            draw.polygon(exterior_coords, fill=(200, 220, 255))
 
         # Draw room interiors (light green)
         for room in floorplan.room_interiors:
