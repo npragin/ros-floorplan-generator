@@ -1266,6 +1266,8 @@ class FloorplanGenerator:
         # Calculate corridor gap and room offset from edge
         corridor_gap = max(self.params.wall_thickness, self.params.effective_doorway_length)
         effective_spacing = max(self.params.room_spacing, self.params.wall_thickness)
+        # Minimum distance from segment edge to nearest room edge
+        edge_margin = self.params.hallway_width + corridor_gap
 
         # The open space polygon bounds
         minx, miny, maxx, maxy = segment.polygon.bounds
@@ -1298,15 +1300,15 @@ class FloorplanGenerator:
                 east_connected = "east" in connection_sides
                 if not west_connected:
                     # Pack from west (minx) toward east
-                    first_room_along = minx + self.params.room_wall_length / 2
+                    first_room_along = minx + edge_margin + self.params.room_wall_length / 2
                 elif not east_connected:
                     # Pack from east (maxx) toward west
-                    first_room_along = maxx - self.params.room_wall_length / 2
+                    first_room_along = maxx - edge_margin - self.params.room_wall_length / 2
                     room_step = -room_step
                 else:
                     # Both sides connected, fall back to centering on usable space
-                    usable_minx = minx + corridor_gap
-                    usable_maxx = maxx - corridor_gap
+                    usable_minx = minx + edge_margin
+                    usable_maxx = maxx - edge_margin
                     center = (usable_minx + usable_maxx) / 2
                     total_span = (
                         num_rooms_this_side * self.params.room_wall_length
@@ -1319,15 +1321,15 @@ class FloorplanGenerator:
                 north_connected = "north" in connection_sides
                 if not south_connected:
                     # Pack from south (miny) toward north
-                    first_room_along = miny + self.params.room_wall_length / 2
+                    first_room_along = miny + edge_margin + self.params.room_wall_length / 2
                 elif not north_connected:
                     # Pack from north (maxy) toward south
-                    first_room_along = maxy - self.params.room_wall_length / 2
+                    first_room_along = maxy - edge_margin - self.params.room_wall_length / 2
                     room_step = -room_step
                 else:
                     # Both sides connected, fall back to centering on usable space
-                    usable_miny = miny + corridor_gap
-                    usable_maxy = maxy - corridor_gap
+                    usable_miny = miny + edge_margin
+                    usable_maxy = maxy - edge_margin
                     center = (usable_miny + usable_maxy) / 2
                     total_span = (
                         num_rooms_this_side * self.params.room_wall_length
