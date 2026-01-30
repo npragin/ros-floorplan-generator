@@ -449,7 +449,6 @@ class FloorplanGenerator:
                     available.remove(idx - 1)
                 if idx < num_segments - 1 and idx + 1 in available:
                     available.remove(idx + 1)
-        print(open_space_indices)
 
         rooms_per_segment = self._calculate_rooms_per_segment(num_segments, open_space_indices)
 
