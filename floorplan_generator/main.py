@@ -26,6 +26,7 @@ DEFAULTS: dict[str, Any] = {
     "doorway_length": 0.0,
     "hallway_end_padding": 0.0,
     "num_turns": 0,
+    "num_open_spaces": 0,
     "turn_direction": "alternating",
     "seed": None,
     "max_retries": 10,
@@ -175,6 +176,14 @@ def generate(
             show_default=str(DEFAULTS["num_turns"]),
         ),
     ] = None,
+    num_open_spaces: Annotated[
+        int | None,
+        typer.Option(
+            "--num-open-spaces",
+            help="Number of hallway segments to convert to open spaces. Must be <= (num_turns + 1) / 2.",
+            show_default=str(DEFAULTS["num_open_spaces"]),
+        ),
+    ] = None,
     turn_direction: Annotated[
         str | None,
         typer.Option(
@@ -263,6 +272,7 @@ def generate(
         hallway_end_padding, cfg, "hallway_end_padding", DEFAULTS["hallway_end_padding"]
     )
     resolved_num_turns = resolve_param(num_turns, cfg, "num_turns", DEFAULTS["num_turns"])
+    resolved_num_open_spaces = resolve_param(num_open_spaces, cfg, "num_open_spaces", DEFAULTS["num_open_spaces"])
     resolved_turn_direction = resolve_param(turn_direction, cfg, "turn_direction", DEFAULTS["turn_direction"])
     resolved_seed = resolve_param(seed, cfg, "seed", DEFAULTS["seed"])
     resolved_max_retries = resolve_param(max_retries, cfg, "max_retries", DEFAULTS["max_retries"])
@@ -275,6 +285,14 @@ def generate(
     # Validate required parameters
     if resolved_num_rooms is None:
         raise typer.BadParameter("num_rooms is required. Provide it via --num-rooms/-n or in a config file.")
+
+    # Validate num_open_spaces constraint
+    max_open_spaces = (resolved_num_turns + 1) // 2
+    if resolved_num_open_spaces > max_open_spaces:
+        raise typer.BadParameter(
+            f"num_open_spaces ({resolved_num_open_spaces}) must be <= (num_turns + 1) / 2 "
+            f"({max_open_spaces} with {resolved_num_turns} turns)"
+        )
 
     # Handle seed: auto-generate if not provided, then seed the RNG once here
     seed_was_provided = resolved_seed is not None
@@ -297,6 +315,7 @@ def generate(
         doorway_length=resolved_doorway_length,
         hallway_end_padding=resolved_hallway_end_padding,
         num_turns=resolved_num_turns,
+        num_open_spaces=resolved_num_open_spaces,
         turn_direction=resolved_turn_direction,
         seed=resolved_seed,
     )
@@ -310,6 +329,7 @@ def generate(
     typer.echo(f"  Room spacing: {params.room_spacing}m")
     typer.echo(f"  Hallway end padding: {params.hallway_end_padding}m")
     typer.echo(f"  Number of turns: {params.num_turns}")
+    typer.echo(f"  Open spaces: {params.num_open_spaces}")
     typer.echo(f"  Turn direction: {params.turn_direction}")
     if seed_was_provided:
         typer.echo(f"  Seed: {resolved_seed}")

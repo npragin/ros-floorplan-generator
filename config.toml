@@ -1,20 +1,21 @@
 # Floorplan parameters
 ## General
 wall_thickness = 0.2
-num_turns = 1
-turn_direction = "alternating" # Options: "alternating", "random", "clockwise", "counterclockwise" but clockwise and counterclockwise are broken
-seed = 0
+num_turns = 3
+turn_direction = "random"  # Options: "alternating", "random", "clockwise", "counterclockwise" but clockwise and counterclockwise are broken
+# seed = 0
 max_retries = 1
 ## Rooms
-num_rooms = 6
+num_rooms = 6  # STALE: To use the minimum hallway length, set this to 3 * (num_turns + 1) + 1
 room_wall_length = 3.7
-room_spacing = 0 # wall to wall spacing
+room_spacing = 0  # Wall-to-wall spacing
 ## Doorway
 doorway_width = 0.8
 doorway_length = 0
 ## Hallway
 hallway_width = 1
-hallway_end_padding = 1.45 # Recommended value for vibes: (room_wall_length - doorway_width) / 2
+hallway_end_padding = 1.45  # Recommended value for vibes: (room_wall_length - doorway_width) / 2
+num_open_spaces = 1
 
 # Output options
 output = "output/floorplan.png"
