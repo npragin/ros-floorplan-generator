@@ -1225,16 +1225,9 @@ class FloorplanGenerator:
             if segment.is_open_space:
                 # For open spaces, determine which side the room is on
                 # by comparing room center to the square's bounds
-                dx_left = abs(room_center_x - seg_minx)
-                dx_right = abs(room_center_x - seg_maxx)
-                dy_bottom = abs(room_center_y - seg_miny)
-                dy_top = abs(room_center_y - seg_maxy)
-
-                min_dist = min(dx_left, dx_right, dy_bottom, dy_top)
-
-                if min_dist in (dy_top, dy_bottom):
+                if room_center_y < seg_miny or room_center_y > seg_maxy:
                     # Room is above or below the open space
-                    if room_miny > seg_maxy:
+                    if room_center_y > seg_maxy:
                         door_y_min = seg_maxy
                         door_y_max = room_miny
                     else:
@@ -1248,7 +1241,7 @@ class FloorplanGenerator:
                     )
                 else:
                     # Room is left or right of the open space
-                    if room_minx > seg_maxx:
+                    if room_center_x > seg_maxx:
                         door_x_min = seg_maxx
                         door_x_max = room_minx
                     else:
