@@ -268,37 +268,33 @@ class FloorplanGenerator:
             """Convert a LinearRing to pixel coordinates."""
             return [world_to_pixel(x, y) for x, y in ring.coords]
 
-        def draw_polygon_with_holes(
-            polygon: Polygon, fill: tuple[int, int, int], hole_fill: tuple[int, int, int]
-        ) -> None:
-            """Draw a polygon, properly handling interior holes."""
-            exterior_coords = ring_to_pixel_coords(polygon.exterior)
-            draw.polygon(exterior_coords, fill=fill)
-            for interior in polygon.interiors:
-                hole_coords = ring_to_pixel_coords(interior)
-                draw.polygon(hole_coords, fill=hole_fill)
+        bg_color = (240, 240, 240)
 
-        def draw_polygon(polygon: Polygon | MultiPolygon, fill: tuple[int, int, int]) -> None:
-            """Draw a simple polygon (no hole handling needed for rooms/hallway/doors)."""
+        def draw_polygon(
+            polygon: Polygon | MultiPolygon,
+            fill: tuple[int, int, int],
+            hole_fill: tuple[int, int, int] = bg_color,
+        ) -> None:
+            """Draw a polygon, handling interior holes."""
             if isinstance(polygon, MultiPolygon):
                 for geom in polygon.geoms:
                     if isinstance(geom, Polygon):
                         exterior_coords = ring_to_pixel_coords(geom.exterior)
                         draw.polygon(exterior_coords, fill=fill)
+                        for interior in geom.interiors:
+                            hole_coords = ring_to_pixel_coords(interior)
+                            print(interior.bounds)
+                            draw.polygon(hole_coords, fill=hole_fill)
             elif isinstance(polygon, Polygon):
                 exterior_coords = ring_to_pixel_coords(polygon.exterior)
                 draw.polygon(exterior_coords, fill=fill)
-
-        bg_color = (240, 240, 240)
+                for interior in polygon.interiors:
+                    hole_coords = ring_to_pixel_coords(interior)
+                    draw.polygon(hole_coords, fill=hole_fill)
 
         # Draw walls first (dark gray), with holes as background color
         if walls:
-            if isinstance(walls, MultiPolygon):
-                for geom in walls.geoms:
-                    if isinstance(geom, Polygon):
-                        draw_polygon_with_holes(geom, (60, 60, 60), bg_color)
-            elif isinstance(walls, Polygon):
-                draw_polygon_with_holes(walls, (60, 60, 60), bg_color)
+            draw_polygon(walls, (60, 60, 60))
 
         # Draw hallway interior (light blue)
         if hallway:
