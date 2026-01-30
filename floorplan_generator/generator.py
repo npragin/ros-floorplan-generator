@@ -1519,6 +1519,8 @@ class FloorplanGenerator:
         buffered_pieces = [hallway_interior.buffer(wt, join_style="mitre")]
         for room in room_interiors:
             buffered_pieces.append(room.buffer(wt, join_style="mitre"))
+        for door in doors:
+            buffered_pieces.append(door.buffer(wt, join_style="mitre"))
         all_buffered = unary_union(buffered_pieces)
 
         # Free space = hallway + rooms + doors (doors cut through interior walls)

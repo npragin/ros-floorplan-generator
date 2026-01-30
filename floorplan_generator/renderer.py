@@ -136,8 +136,6 @@ class FloorplanRenderer:
                 hole_coords = ring_to_pixel_coords(interior)
                 draw.polygon(hole_coords, fill=hole_fill)
 
-        image.save(output_path.parent / (output_path.stem + "_walls.png"))
-
         # Draw hallway interior (light blue), excluding wall regions
         hallway_visible = floorplan.hallway_interior.difference(floorplan.walls)
         if isinstance(hallway_visible, MultiPolygon):
@@ -149,8 +147,6 @@ class FloorplanRenderer:
         elif isinstance(hallway_visible, Polygon):
             exterior_coords = ring_to_pixel_coords(hallway_visible.exterior)
             draw.polygon(exterior_coords, fill=(200, 220, 255))
-
-        image.save(output_path.parent / (output_path.stem + "_hallway.png"))
 
         # Draw walls (dark gray), with holes as background color.
         # Since walls = buffered - free_space, walls and free space are disjoint,
