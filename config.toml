@@ -13,9 +13,18 @@ room_spacing = 0  # Wall-to-wall spacing
 doorway_width = 0.8
 doorway_length = 0
 ## Hallway
-hallway_width = 1
+hallway_width = 1.8
 hallway_end_padding = 1.45  # Recommended value for vibes: (room_wall_length - doorway_width) / 2
 num_open_spaces = 1
+
+## Obstacles
+obstacles_enabled = true
+num_obstacles = 20
+obstacle_length = 0.2  #  This requires balancing between hallway width/room size, obstacle clearance, and your lidar's angular resolution.
+                       #  It should be small enough that your robot can go around it in a hallway or room, but large enough for your lidar to see it.
+obstacle_clearance = 0.4  # This should be your robot's radius plus some buffer
+obstacle_spacing = 0
+obstacle_placement = "both"  # Options: "rooms", "hallways", "both"
 
 # Output options
 output = "output/floorplan.png"

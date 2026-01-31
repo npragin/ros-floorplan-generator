@@ -34,6 +34,12 @@ DEFAULTS: dict[str, Any] = {
     "resolution": 0.05,
     "debug": False,
     "skip_validation": False,
+    "obstacles_enabled": False,
+    "num_obstacles": 0,
+    "obstacle_length": 1.0,
+    "obstacle_clearance": 0.5,
+    "obstacle_spacing": 0.5,
+    "obstacle_placement": "both",
 }
 
 
@@ -248,6 +254,55 @@ def generate(
             show_default="no-skip-validation",
         ),
     ] = None,
+    # Obstacle parameters
+    obstacles: Annotated[
+        bool | None,
+        typer.Option(
+            "--obstacles/--no-obstacles",
+            help="Enable obstacle generation.",
+            show_default="no-obstacles",
+        ),
+    ] = None,
+    num_obstacles: Annotated[
+        int | None,
+        typer.Option(
+            "--num-obstacles",
+            help="Number of obstacles to place in the floorplan.",
+            show_default=str(DEFAULTS["num_obstacles"]),
+        ),
+    ] = None,
+    obstacle_length: Annotated[
+        float | None,
+        typer.Option(
+            "--obstacle-length",
+            help="Side length of square obstacles in meters.",
+            show_default=str(DEFAULTS["obstacle_length"]),
+        ),
+    ] = None,
+    obstacle_clearance: Annotated[
+        float | None,
+        typer.Option(
+            "--obstacle-clearance",
+            help="Minimum clearance around obstacles in meters.",
+            show_default=str(DEFAULTS["obstacle_clearance"]),
+        ),
+    ] = None,
+    obstacle_spacing: Annotated[
+        float | None,
+        typer.Option(
+            "--obstacle-spacing",
+            help="Minimum distance between obstacles in meters.",
+            show_default=str(DEFAULTS["obstacle_spacing"]),
+        ),
+    ] = None,
+    obstacle_placement: Annotated[
+        str | None,
+        typer.Option(
+            "--obstacle-placement",
+            help="Where to place obstacles: 'rooms', 'hallways', or 'both'.",
+            show_default=str(DEFAULTS["obstacle_placement"]),
+        ),
+    ] = None,
 ) -> None:
     """
     Generate office-style floorplans for ROS2 Stage simulator.
@@ -281,6 +336,18 @@ def generate(
     resolved_debug = resolve_param(debug, cfg, "debug", DEFAULTS["debug"])
     resolved_debug_steps = resolve_param(debug_steps, cfg, "debug_steps")
     resolved_skip_validation = resolve_param(skip_validation, cfg, "skip_validation", DEFAULTS["skip_validation"])
+    resolved_obstacles_enabled = resolve_param(obstacles, cfg, "obstacles_enabled", DEFAULTS["obstacles_enabled"])
+    resolved_num_obstacles = resolve_param(num_obstacles, cfg, "num_obstacles", DEFAULTS["num_obstacles"])
+    resolved_obstacle_length = resolve_param(obstacle_length, cfg, "obstacle_length", DEFAULTS["obstacle_length"])
+    resolved_obstacle_clearance = resolve_param(
+        obstacle_clearance, cfg, "obstacle_clearance", DEFAULTS["obstacle_clearance"]
+    )
+    resolved_obstacle_spacing = resolve_param(
+        obstacle_spacing, cfg, "obstacle_spacing", DEFAULTS["obstacle_spacing"]
+    )
+    resolved_obstacle_placement = resolve_param(
+        obstacle_placement, cfg, "obstacle_placement", DEFAULTS["obstacle_placement"]
+    )
 
     # Validate required parameters
     if resolved_num_rooms is None:
@@ -318,6 +385,12 @@ def generate(
         num_open_spaces=resolved_num_open_spaces,
         turn_direction=resolved_turn_direction,
         seed=resolved_seed,
+        obstacles_enabled=resolved_obstacles_enabled,
+        num_obstacles=resolved_num_obstacles,
+        obstacle_length=resolved_obstacle_length,
+        obstacle_clearance=resolved_obstacle_clearance,
+        obstacle_spacing=resolved_obstacle_spacing,
+        obstacle_placement=resolved_obstacle_placement,
     )
 
     typer.echo(f"Generating floorplan with {params.num_rooms} rooms...")
@@ -336,6 +409,12 @@ def generate(
     else:
         typer.echo(f"  Seed: {resolved_seed} (auto-generated, use --seed {resolved_seed} to reproduce)")
     typer.echo(f"  Max retries: {resolved_max_retries}")
+    if resolved_obstacles_enabled:
+        typer.echo(f"  Obstacles: {resolved_num_obstacles}")
+        typer.echo(f"  Obstacle size: {resolved_obstacle_length}m x {resolved_obstacle_length}m")
+        typer.echo(f"  Obstacle clearance: {resolved_obstacle_clearance}m")
+        typer.echo(f"  Obstacle spacing: {resolved_obstacle_spacing}m")
+        typer.echo(f"  Obstacle placement: {resolved_obstacle_placement}")
 
     # Generate floorplan
     generator = FloorplanGenerator(params, max_retries=resolved_max_retries)
@@ -365,6 +444,8 @@ def generate(
     width = bounds[2] - bounds[0]
     height = bounds[3] - bounds[1]
     typer.echo(f"\nFloorplan dimensions: {width:.1f}m x {height:.1f}m")
+    if floorplan.obstacles:
+        typer.echo(f"Obstacles placed: {len(floorplan.obstacles)}/{params.num_obstacles}")
 
     # Print validation results at the end (colored for visibility)
     if not resolved_skip_validation:

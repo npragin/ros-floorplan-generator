@@ -83,6 +83,12 @@ class FloorplanRenderer:
         elif isinstance(floorplan.walls, Polygon):
             draw_polygon_with_holes(floorplan.walls, fill=0, hole_fill=255)
 
+        # Draw obstacles as black (same as walls for occupancy grid)
+        for obstacle in floorplan.obstacles:
+            if isinstance(obstacle, Polygon):
+                exterior_coords = ring_to_pixel_coords(obstacle.exterior)
+                draw.polygon(exterior_coords, fill=0)
+
         # Save the image
         image.save(output_path)
 
@@ -170,6 +176,12 @@ class FloorplanRenderer:
             if isinstance(door, Polygon):
                 exterior_coords = ring_to_pixel_coords(door.exterior)
                 draw.polygon(exterior_coords, fill=(255, 165, 0))
+
+        # Draw obstacles (red)
+        for obstacle in floorplan.obstacles:
+            if isinstance(obstacle, Polygon):
+                exterior_coords = ring_to_pixel_coords(obstacle.exterior)
+                draw.polygon(exterior_coords, fill=(255, 0, 0))
 
         # Save the image
         image.save(output_path)

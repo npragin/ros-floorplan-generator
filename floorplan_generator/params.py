@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 TurnDirection = Literal["alternating", "random", "clockwise", "counterclockwise"]
+ObstaclePlacement = Literal["rooms", "hallways", "both"]
 
 
 @dataclass
@@ -46,6 +47,12 @@ class FloorplanParams:
     turn_direction: TurnDirection = "alternating"
     num_open_spaces: int = 0
     seed: int | None = None
+    obstacles_enabled: bool = False
+    num_obstacles: int = 0
+    obstacle_length: float = 1.0
+    obstacle_clearance: float = 0.5
+    obstacle_spacing: float = 0.5
+    obstacle_placement: ObstaclePlacement = "both"
 
     def validate(self) -> None:
         """
@@ -100,6 +107,22 @@ class FloorplanParams:
         valid_turn_directions = ("alternating", "random", "clockwise", "counterclockwise")
         if self.turn_direction not in valid_turn_directions:
             raise ValueError(f"turn_direction must be one of {valid_turn_directions}, got '{self.turn_direction}'")
+
+        # Check obstacle parameters
+        if self.obstacles_enabled:
+            if self.num_obstacles < 0:
+                raise ValueError(f"num_obstacles must be non-negative, got {self.num_obstacles}")
+            if self.obstacle_length <= 0:
+                raise ValueError(f"obstacle_length must be positive, got {self.obstacle_length}")
+            if self.obstacle_clearance < 0:
+                raise ValueError(f"obstacle_clearance must be non-negative, got {self.obstacle_clearance}")
+            if self.obstacle_spacing < 0:
+                raise ValueError(f"obstacle_spacing must be non-negative, got {self.obstacle_spacing}")
+            valid_placements = ("rooms", "hallways", "both")
+            if self.obstacle_placement not in valid_placements:
+                raise ValueError(
+                    f"obstacle_placement must be one of {valid_placements}, got '{self.obstacle_placement}'"
+                )
 
     def min_segment_length(self, is_end_segment: bool) -> float:
         """

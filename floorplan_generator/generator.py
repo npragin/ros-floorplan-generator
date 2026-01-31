@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
+import numpy as np
 from shapely.geometry import LinearRing, MultiPolygon, Point, Polygon, box
 from shapely.ops import unary_union
 
@@ -47,6 +48,7 @@ class Floorplan:
     doors: list[Polygon]
     walls: Polygon
     params: FloorplanParams
+    obstacles: list[Polygon] = field(default_factory=list)
     room_ids: list[int] = field(default_factory=list)
 
     def get_bounds(self) -> tuple[float, float, float, float]:
@@ -183,12 +185,32 @@ class FloorplanGenerator:
                 walls=walls,
             )
 
+        # Place obstacles if enabled
+        obstacles: list[Polygon] = []
+        if self.params.obstacles_enabled:
+            obstacles = self._place_obstacles(
+                segments,
+                room_interiors,
+                doors,
+            )
+
+            if debug_dir:
+                self._render_step(
+                    Path(debug_dir) / "07_with_obstacles.png",
+                    hallway=hallway_interior,
+                    rooms=room_interiors,
+                    doors=doors,
+                    walls=walls,
+                    obstacles=obstacles,
+                )
+
         return Floorplan(
             hallway_interior=cast(Polygon, hallway_interior),
             hallway_segments=segments,
             room_interiors=room_interiors,
             doors=doors,
             walls=walls,
+            obstacles=obstacles,
             params=self.params,
             room_ids=room_ids,
         )
@@ -200,6 +222,7 @@ class FloorplanGenerator:
         rooms: list[Polygon] | None = None,
         doors: list[Polygon] | None = None,
         walls: Polygon | MultiPolygon | None = None,
+        obstacles: list[Polygon] | None = None,
     ) -> None:
         """
         Render a debug image showing the current generation step.
@@ -210,6 +233,7 @@ class FloorplanGenerator:
             rooms: List of room interior polygons.
             doors: List of door polygons.
             walls: The walls polygon.
+            obstacles: List of obstacle polygons.
 
         """
         from pathlib import Path
@@ -230,6 +254,8 @@ class FloorplanGenerator:
             all_geoms.extend(doors)
         if walls:
             all_geoms.append(walls)
+        if obstacles:
+            all_geoms.extend(obstacles)
 
         if not all_geoms:
             return
@@ -298,6 +324,11 @@ class FloorplanGenerator:
         if doors:
             for door in doors:
                 draw_polygon(door, (255, 165, 0))
+
+        # Draw obstacles (red)
+        if obstacles:
+            for obstacle in obstacles:
+                draw_polygon(obstacle, (255, 0, 0))
 
         image.save(output_path)
         print(f"  Debug: saved {output_path.name}")
@@ -1533,3 +1564,174 @@ class FloorplanGenerator:
         all_walls = all_buffered.difference(free_space)
 
         return all_walls
+
+    def _place_obstacles(
+        self,
+        hallway_segments: list[HallwaySegment],
+        room_interiors: list[Polygon],
+        doors: list[Polygon],
+    ) -> list[Polygon]:
+        """
+        Place square obstacles in the floorplan.
+
+        Uses a targeted sampling scheme: randomly selects a category (room or
+        hallway), then a specific polygon within that category, then computes
+        the available placement area by eroding by clearance and subtracting
+        existing obstacles (expanded by spacing). Polygons that cannot fit any
+        obstacle are remembered and skipped in future iterations.
+
+        Args:
+            hallway_segments: List of hallway segments with polygons.
+            room_interiors: List of room interior spaces.
+            doors: List of door openings.
+
+        Returns:
+            List of obstacle polygons.
+
+        """
+        if not self.params.obstacles_enabled or self.params.num_obstacles <= 0:
+            return []
+
+        half_len = self.params.obstacle_length / 2
+        clearance = self.params.obstacle_clearance
+        spacing = self.params.obstacle_spacing
+        placement = self.params.obstacle_placement
+
+        # Erode each polygon by clearance + half obstacle length so that any
+        # sampled center point yields an obstacle fully inside with clearance.
+        erosion = clearance + half_len
+        door_union = unary_union(doors) if doors else Polygon()
+
+        # Build per-polygon base regions (eroded, with doors excluded)
+        hallway_bases: list[Polygon | MultiPolygon] = []
+        room_bases: list[Polygon | MultiPolygon] = []
+
+        if placement in ("hallways", "both"):
+            for seg in hallway_segments:
+                eroded = seg.polygon.difference(door_union).buffer(-erosion)
+                hallway_bases.append(eroded)
+
+        if placement in ("rooms", "both"):
+            for room in room_interiors:
+                eroded = room.difference(door_union).buffer(-erosion)
+                room_bases.append(eroded)
+
+        # Track which polygon indices are exhausted
+        exhausted_hallways: set[int] = set()
+        exhausted_rooms: set[int] = set()
+        obstacles: list[Polygon] = []
+
+        for _ in range(self.params.num_obstacles):
+            placed = False
+
+            # Compute areas for non-exhausted polygons in each category
+            hallway_areas = {
+                i: hallway_bases[i].area
+                for i in range(len(hallway_bases))
+                if i not in exhausted_hallways and not hallway_bases[i].is_empty
+            }
+            room_areas = {
+                i: room_bases[i].area
+                for i in range(len(room_bases))
+                if i not in exhausted_rooms and not room_bases[i].is_empty
+            }
+
+            total_hallway_area = sum(hallway_areas.values())
+            total_room_area = sum(room_areas.values())
+
+            if total_hallway_area == 0 and total_room_area == 0:
+                print(f"  Warning: no space remaining, placed {len(obstacles)}/{self.params.num_obstacles} obstacles")
+                break
+
+            # Step 1: choose category weighted by total area
+            if total_hallway_area > 0 and total_room_area > 0:
+                category = random.choices(
+                    ["hallway", "room"],
+                    weights=[total_hallway_area, total_room_area],
+                )[0]
+            elif total_hallway_area > 0:
+                category = "hallway"
+            else:
+                category = "room"
+
+            # Try the chosen category first, then fall back to the other
+            categories_to_try = [category]
+            other = "room" if category == "hallway" else "hallway"
+            other_area = total_room_area if other == "room" else total_hallway_area
+            if other_area > 0:
+                categories_to_try.append(other)
+
+            for cat in categories_to_try:
+                if cat == "hallway":
+                    bases = hallway_bases
+                    exhausted = exhausted_hallways
+                    areas = hallway_areas
+                else:
+                    bases = room_bases
+                    exhausted = exhausted_rooms
+                    areas = room_areas
+
+                if not areas:
+                    continue
+
+                # Step 2: choose polygons in area-weighted order without replacement
+                indices = list(areas.keys())
+                weights = np.array([areas[i] for i in indices])
+                probabilities = weights / weights.sum()
+                rng = np.random.default_rng()
+                ordered_indices = list(rng.choice(indices, size=len(indices), replace=False, p=probabilities))
+
+                for idx in ordered_indices:
+                    base = bases[idx]
+                    if base.is_empty:
+                        exhausted.add(idx)
+                        continue
+
+                    # Subtract existing obstacles expanded by spacing + half_len
+                    # so sampled centers won't produce obstacles within spacing distance
+                    sampleable = base
+                    for obs in obstacles:
+                        sampleable = sampleable.difference(obs.buffer(spacing + half_len))
+                    if sampleable.is_empty:
+                        exhausted.add(idx)
+                        continue
+
+                    # Sample a center point within the sampleable region
+                    cx, cy = self._sample_point_in_region(sampleable)
+                    obstacle = box(cx - half_len, cy - half_len, cx + half_len, cy + half_len)
+                    obstacles.append(obstacle)
+                    placed = True
+                    break
+
+                if placed:
+                    break
+
+            if not placed:
+                print(f"  Warning: no space remaining, placed {len(obstacles)}/{self.params.num_obstacles} obstacles")
+                break
+
+        return obstacles
+
+    def _sample_point_in_region(self, region: Polygon | MultiPolygon) -> tuple[float, float]:
+        """
+        Sample a random point inside a polygon or multipolygon.
+
+        Uses bounding-box rejection sampling on the region, which is expected
+        to be a pre-computed sampleable area (already eroded/differenced).
+
+        Args:
+            region: The region to sample from.
+
+        Returns:
+            An (x, y) coordinate inside the region.
+
+        """
+        minx, miny, maxx, maxy = region.bounds
+        for _ in range(1000):
+            x = random.uniform(minx, maxx)
+            y = random.uniform(miny, maxy)
+            if region.contains(Point(x, y)):
+                return (x, y)
+        # Fallback to representative point (guaranteed inside)
+        pt = region.representative_point()
+        return (pt.x, pt.y)
