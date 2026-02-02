@@ -40,6 +40,10 @@ DEFAULTS: dict[str, Any] = {
     "obstacle_clearance": 0.5,
     "obstacle_spacing": 0.5,
     "obstacle_placement": "both",
+    "robot_radius": None,
+    "num_robots": None,
+    "robot_min_clearance": None,
+    "spawn_export_filename": None,
 }
 
 
@@ -303,6 +307,35 @@ def generate(
             show_default=str(DEFAULTS["obstacle_placement"]),
         ),
     ] = None,
+    # Robot spawn parameters
+    robot_radius: Annotated[
+        float | None,
+        typer.Option(
+            "--robot-radius",
+            help="Robot radius in meters. Required with --num-robots and --robot-min-clearance.",
+        ),
+    ] = None,
+    num_robots: Annotated[
+        int | None,
+        typer.Option(
+            "--num-robots",
+            help="Number of robots to generate spawn positions for.",
+        ),
+    ] = None,
+    robot_min_clearance: Annotated[
+        float | None,
+        typer.Option(
+            "--robot-min-clearance",
+            help="Minimum clearance from walls and between robot edges in meters.",
+        ),
+    ] = None,
+    spawn_export_filename: Annotated[
+        str | None,
+        typer.Option(
+            "--spawn-export-filename",
+            help="Filename for spawn positions CSV. Defaults to 'spawn_positions.csv'.",
+        ),
+    ] = None,
 ) -> None:
     """
     Generate office-style floorplans for ROS2 Stage simulator.
@@ -342,11 +375,17 @@ def generate(
     resolved_obstacle_clearance = resolve_param(
         obstacle_clearance, cfg, "obstacle_clearance", DEFAULTS["obstacle_clearance"]
     )
-    resolved_obstacle_spacing = resolve_param(
-        obstacle_spacing, cfg, "obstacle_spacing", DEFAULTS["obstacle_spacing"]
-    )
+    resolved_obstacle_spacing = resolve_param(obstacle_spacing, cfg, "obstacle_spacing", DEFAULTS["obstacle_spacing"])
     resolved_obstacle_placement = resolve_param(
         obstacle_placement, cfg, "obstacle_placement", DEFAULTS["obstacle_placement"]
+    )
+    resolved_robot_radius = resolve_param(robot_radius, cfg, "robot_radius", DEFAULTS["robot_radius"])
+    resolved_num_robots = resolve_param(num_robots, cfg, "num_robots", DEFAULTS["num_robots"])
+    resolved_robot_min_clearance = resolve_param(
+        robot_min_clearance, cfg, "robot_min_clearance", DEFAULTS["robot_min_clearance"]
+    )
+    resolved_spawn_export_filename = resolve_param(
+        spawn_export_filename, cfg, "spawn_export_filename", DEFAULTS["spawn_export_filename"]
     )
 
     # Validate required parameters
@@ -391,6 +430,10 @@ def generate(
         obstacle_clearance=resolved_obstacle_clearance,
         obstacle_spacing=resolved_obstacle_spacing,
         obstacle_placement=resolved_obstacle_placement,
+        robot_radius=resolved_robot_radius,
+        num_robots=resolved_num_robots,
+        robot_min_clearance=resolved_robot_min_clearance,
+        spawn_export_filename=resolved_spawn_export_filename,
     )
 
     typer.echo(f"Generating floorplan with {params.num_rooms} rooms...")
@@ -439,11 +482,40 @@ def generate(
         renderer.render_debug(floorplan, debug_path)
         typer.echo(f"  Saved debug visualization to {debug_path}")
 
+    # Generate robot spawn positions if configured
+    if params.robot_radius is not None:
+        from floorplan_generator.spawn import (
+            generate_spawn_positions,
+            transform_to_map_center,
+            write_spawn_csv,
+        )
+
+        typer.echo(f"\nGenerating spawn positions for {params.num_robots} robots...")
+        typer.echo(f"  Robot radius: {params.robot_radius}m")
+        typer.echo(f"  Min clearance: {params.robot_min_clearance}m")
+
+        free_space = floorplan.get_free_space()
+        positions = generate_spawn_positions(
+            free_space=free_space,
+            num_robots=params.num_robots,  # type: ignore[arg-type]
+            robot_radius=params.robot_radius,
+            min_clearance=params.robot_min_clearance,  # type: ignore[arg-type]
+            resolution=resolved_resolution,
+        )
+
+        bounds_for_center = floorplan.get_bounds()
+        centered_positions = transform_to_map_center(positions, bounds_for_center)
+
+        spawn_filename = params.spawn_export_filename or "spawn_positions.csv"
+        spawn_path = output_path.parent / spawn_filename
+        write_spawn_csv(centered_positions, spawn_path)
+        typer.echo(f"  Saved spawn positions to {spawn_path}")
+
     # Print some stats
     bounds = floorplan.get_bounds()
     width = bounds[2] - bounds[0]
     height = bounds[3] - bounds[1]
-    typer.echo(f"\nFloorplan dimensions: {width:.1f}m x {height:.1f}m")
+    typer.echo(f"\nFloorplan dimensions: {width:.3f}m x {height:.3f}m")
     if floorplan.obstacles:
         typer.echo(f"Obstacles placed: {len(floorplan.obstacles)}/{params.num_obstacles}")
 

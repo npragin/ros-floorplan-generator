@@ -53,6 +53,10 @@ class FloorplanParams:
     obstacle_clearance: float = 0.5
     obstacle_spacing: float = 0.5
     obstacle_placement: ObstaclePlacement = "both"
+    robot_radius: float | None = None
+    num_robots: int | None = None
+    robot_min_clearance: float | None = None
+    spawn_export_filename: str | None = None
 
     def validate(self) -> None:
         """
@@ -123,6 +127,19 @@ class FloorplanParams:
                 raise ValueError(
                     f"obstacle_placement must be one of {valid_placements}, got '{self.obstacle_placement}'"
                 )
+
+        # Check robot spawn parameters: all three required params must be set or all None
+        spawn_params = [self.robot_radius, self.num_robots, self.robot_min_clearance]
+        spawn_set = [p is not None for p in spawn_params]
+        if any(spawn_set) and not all(spawn_set):
+            raise ValueError("robot_radius, num_robots, and robot_min_clearance must all be provided or all be None")
+        if all(spawn_set):
+            if self.robot_radius <= 0:  # type: ignore[operator]
+                raise ValueError(f"robot_radius must be positive, got {self.robot_radius}")
+            if self.num_robots <= 0:  # type: ignore[operator]
+                raise ValueError(f"num_robots must be positive, got {self.num_robots}")
+            if self.robot_min_clearance < 0:  # type: ignore[operator]
+                raise ValueError(f"robot_min_clearance must be non-negative, got {self.robot_min_clearance}")
 
     def min_segment_length(self, is_end_segment: bool) -> float:
         """

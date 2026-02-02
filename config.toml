@@ -26,6 +26,12 @@ obstacle_clearance = 0.4  # This should be your robot's radius plus some buffer
 obstacle_spacing = 0
 obstacle_placement = "both"  # Options: "rooms", "hallways", "both"
 
+## Robot Spawn Positions
+robot_radius = 0.255
+num_robots = 5
+robot_min_clearance = 0.1
+spawn_export_filename = "spawn_positions.csv"
+
 # Output options
 output = "output/floorplan.png"
 resolution = 0.01
