@@ -30,7 +30,7 @@ obstacle_placement = "both"  # Options: "rooms", "hallways", "both"
 robot_radius = 0.255
 num_robots = 5
 robot_min_clearance = 0.1
-spawn_export_filename = "spawn_positions.csv"
+spawn_export_filename = "world_config.yaml"
 
 # Output options
 output = "output/floorplan.png"

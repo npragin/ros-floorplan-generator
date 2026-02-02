@@ -1,6 +1,5 @@
 """Robot spawn position generation via greedy circle packing."""
 
-import csv
 from pathlib import Path
 
 import numpy as np
@@ -128,21 +127,32 @@ def transform_to_map_center(
     return [(x - center_x, y - center_y) for x, y in positions]
 
 
-def write_spawn_csv(
+def write_spawn_yaml(
     positions: list[tuple[float, float]],
+    map_width: float,
+    map_height: float,
     output_path: Path,
 ) -> None:
     """
-    Write spawn positions to a CSV file.
+    Write spawn positions and map dimensions to a YAML file.
 
     Args:
         positions: List of (x, y) positions.
-        output_path: Path to the output CSV file.
+        map_width: Width of the generated map in meters.
+        map_height: Height of the generated map in meters.
+        output_path: Path to the output YAML file.
 
     """
+    import yaml
+
+    data = {
+        "map": {
+            "width": round(map_width, 4),
+            "height": round(map_height, 4),
+        },
+        "robots": [{"robot_id": i, "x": round(x, 4), "y": round(y, 4)} for i, (x, y) in enumerate(positions)],
+    }
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["robot_id", "x", "y"])
-        for i, (x, y) in enumerate(positions):
-            writer.writerow([i, f"{x:.4f}", f"{y:.4f}"])
+    with output_path.open("w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)

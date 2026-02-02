@@ -333,7 +333,7 @@ def generate(
         str | None,
         typer.Option(
             "--spawn-export-filename",
-            help="Filename for spawn positions CSV. Defaults to 'spawn_positions.csv'.",
+            help="Filename for world config YAML output. Defaults to 'world_config.yaml'.",
         ),
     ] = None,
 ) -> None:
@@ -487,7 +487,7 @@ def generate(
         from floorplan_generator.spawn import (
             generate_spawn_positions,
             transform_to_map_center,
-            write_spawn_csv,
+            write_spawn_yaml,
         )
 
         typer.echo(f"\nGenerating spawn positions for {params.num_robots} robots...")
@@ -506,9 +506,12 @@ def generate(
         bounds_for_center = floorplan.get_bounds()
         centered_positions = transform_to_map_center(positions, bounds_for_center)
 
-        spawn_filename = params.spawn_export_filename or "spawn_positions.csv"
+        map_width = bounds_for_center[2] - bounds_for_center[0]
+        map_height = bounds_for_center[3] - bounds_for_center[1]
+
+        spawn_filename = params.spawn_export_filename or "world_config.yaml"
         spawn_path = output_path.parent / spawn_filename
-        write_spawn_csv(centered_positions, spawn_path)
+        write_spawn_yaml(centered_positions, map_width, map_height, spawn_path)
         typer.echo(f"  Saved spawn positions to {spawn_path}")
 
     # Print some stats
