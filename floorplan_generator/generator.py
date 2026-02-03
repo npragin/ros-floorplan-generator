@@ -63,14 +63,17 @@ class Floorplan:
 
     def get_free_space(self) -> Polygon:
         """
-        Return the combined free space (rooms + hallway + doors).
+        Return the combined free space (rooms + hallway + doors - obstacles).
 
         Returns:
             A Shapely Polygon representing all navigable space.
 
         """
         all_interiors = [self.hallway_interior, *self.room_interiors, *self.doors]
-        return cast(Polygon, unary_union(all_interiors))
+        free_space = unary_union(all_interiors)
+        if self.obstacles:
+            free_space = free_space.difference(unary_union(self.obstacles))
+        return cast(Polygon, free_space)
 
 
 class FloorplanGenerator:
