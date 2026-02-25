@@ -44,6 +44,9 @@ DEFAULTS: dict[str, Any] = {
     "num_robots": None,
     "robot_min_clearance": None,
     "spawn_export_filename": None,
+    "num_extra_points": None,
+    "extra_point_radius": None,
+    "extra_point_min_clearance": None,
 }
 
 
@@ -336,6 +339,28 @@ def generate(
             help="Filename for world config YAML output. Defaults to 'world_config.yaml'.",
         ),
     ] = None,
+    # Extra point parameters
+    num_extra_points: Annotated[
+        int | None,
+        typer.Option(
+            "--num-extra-points",
+            help="Number of extra points to place in free space.",
+        ),
+    ] = None,
+    extra_point_radius: Annotated[
+        float | None,
+        typer.Option(
+            "--extra-point-radius",
+            help="Radius of each extra point in meters.",
+        ),
+    ] = None,
+    extra_point_min_clearance: Annotated[
+        float | None,
+        typer.Option(
+            "--extra-point-min-clearance",
+            help="Minimum clearance from walls and between extra point edges in meters.",
+        ),
+    ] = None,
 ) -> None:
     """
     Generate office-style floorplans for ROS2 Stage simulator.
@@ -387,6 +412,15 @@ def generate(
     resolved_spawn_export_filename = resolve_param(
         spawn_export_filename, cfg, "spawn_export_filename", DEFAULTS["spawn_export_filename"]
     )
+    resolved_num_extra_points = resolve_param(
+        num_extra_points, cfg, "num_extra_points", DEFAULTS["num_extra_points"]
+    )
+    resolved_extra_point_radius = resolve_param(
+        extra_point_radius, cfg, "extra_point_radius", DEFAULTS["extra_point_radius"]
+    )
+    resolved_extra_point_min_clearance = resolve_param(
+        extra_point_min_clearance, cfg, "extra_point_min_clearance", DEFAULTS["extra_point_min_clearance"]
+    )
 
     # Validate required parameters
     if resolved_num_rooms is None:
@@ -434,6 +468,9 @@ def generate(
         num_robots=resolved_num_robots,
         robot_min_clearance=resolved_robot_min_clearance,
         spawn_export_filename=resolved_spawn_export_filename,
+        num_extra_points=resolved_num_extra_points,
+        extra_point_radius=resolved_extra_point_radius,
+        extra_point_min_clearance=resolved_extra_point_min_clearance,
     )
 
     typer.echo(f"Generating floorplan with {params.num_rooms} rooms...")
@@ -482,37 +519,64 @@ def generate(
         renderer.render_debug(floorplan, debug_path)
         typer.echo(f"  Saved debug visualization to {debug_path}")
 
-    # Generate robot spawn positions if configured
-    if params.robot_radius is not None:
+    # Generate robot spawn positions and/or extra points if configured
+    has_robots = params.robot_radius is not None
+    has_extra_points = params.extra_point_radius is not None
+
+    if has_robots or has_extra_points:
         from floorplan_generator.spawn import (
+            generate_extra_point_positions,
             generate_spawn_positions,
             transform_to_map_center,
             write_spawn_yaml,
         )
 
-        typer.echo(f"\nGenerating spawn positions for {params.num_robots} robots...")
-        typer.echo(f"  Robot radius: {params.robot_radius}m")
-        typer.echo(f"  Min clearance: {params.robot_min_clearance}m")
-
         free_space = floorplan.get_free_space()
-        positions = generate_spawn_positions(
-            free_space=free_space,
-            num_robots=params.num_robots,  # type: ignore[arg-type]
-            robot_radius=params.robot_radius,
-            min_clearance=params.robot_min_clearance,  # type: ignore[arg-type]
-            resolution=resolved_resolution,
-        )
-
         bounds_for_center = floorplan.get_bounds()
-        centered_positions = transform_to_map_center(positions, bounds_for_center)
-
         map_width = bounds_for_center[2] - bounds_for_center[0]
         map_height = bounds_for_center[3] - bounds_for_center[1]
 
+        centered_robot_positions: list[tuple[float, float]] | None = None
+        robot_positions_raw: list[tuple[float, float]] = []
+
+        if has_robots:
+            typer.echo(f"\nGenerating spawn positions for {params.num_robots} robots...")
+            typer.echo(f"  Robot radius: {params.robot_radius}m")
+            typer.echo(f"  Min clearance: {params.robot_min_clearance}m")
+
+            robot_positions_raw = generate_spawn_positions(
+                free_space=free_space,
+                num_robots=params.num_robots,  # type: ignore[arg-type]
+                robot_radius=params.robot_radius,
+                min_clearance=params.robot_min_clearance,  # type: ignore[arg-type]
+                resolution=resolved_resolution,
+            )
+            centered_robot_positions = transform_to_map_center(robot_positions_raw, bounds_for_center)
+
+        centered_extra_points: list[tuple[float, float]] | None = None
+
+        if has_extra_points:
+            typer.echo(f"\nGenerating {params.num_extra_points} extra points...")
+            typer.echo(f"  Extra point radius: {params.extra_point_radius}m")
+            typer.echo(f"  Min clearance: {params.extra_point_min_clearance}m")
+
+            extra_positions_raw = generate_extra_point_positions(
+                free_space=free_space,
+                num_extra_points=params.num_extra_points,  # type: ignore[arg-type]
+                extra_point_radius=params.extra_point_radius,  # type: ignore[arg-type]
+                min_clearance=params.extra_point_min_clearance,  # type: ignore[arg-type]
+                existing_positions=robot_positions_raw,
+                robot_radius=params.robot_radius or 0.0,
+                resolution=resolved_resolution,
+            )
+            centered_extra_points = transform_to_map_center(extra_positions_raw, bounds_for_center)
+
         spawn_filename = params.spawn_export_filename or "world_config.yaml"
         spawn_path = output_path.parent / spawn_filename
-        write_spawn_yaml(centered_positions, map_width, map_height, spawn_path)
-        typer.echo(f"  Saved spawn positions to {spawn_path}")
+        write_spawn_yaml(
+            centered_robot_positions, map_width, map_height, spawn_path, extra_points=centered_extra_points
+        )
+        typer.echo(f"  Saved world config to {spawn_path}")
 
     # Print some stats
     bounds = floorplan.get_bounds()

@@ -32,6 +32,11 @@ num_robots = 5
 robot_min_clearance = 0.1
 spawn_export_filename = "world_config.yaml"
 
+## Extra Points
+num_extra_points = 3
+extra_point_radius = 0.5
+extra_point_min_clearance = 0.0
+
 # Output options
 output = "output/floorplan.png"
 resolution = 0.01

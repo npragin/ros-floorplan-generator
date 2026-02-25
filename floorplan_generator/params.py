@@ -57,6 +57,9 @@ class FloorplanParams:
     num_robots: int | None = None
     robot_min_clearance: float | None = None
     spawn_export_filename: str | None = None
+    num_extra_points: int | None = None
+    extra_point_radius: float | None = None
+    extra_point_min_clearance: float | None = None
 
     def validate(self) -> None:
         """
@@ -140,6 +143,21 @@ class FloorplanParams:
                 raise ValueError(f"num_robots must be positive, got {self.num_robots}")
             if self.robot_min_clearance < 0:  # type: ignore[operator]
                 raise ValueError(f"robot_min_clearance must be non-negative, got {self.robot_min_clearance}")
+
+        # Check extra point parameters: all three must be set or all None
+        extra_params = [self.num_extra_points, self.extra_point_radius, self.extra_point_min_clearance]
+        extra_set = [p is not None for p in extra_params]
+        if any(extra_set) and not all(extra_set):
+            raise ValueError(
+                "num_extra_points, extra_point_radius, and extra_point_min_clearance must all be provided or all be None"
+            )
+        if all(extra_set):
+            if self.num_extra_points <= 0:  # type: ignore[operator]
+                raise ValueError(f"num_extra_points must be positive, got {self.num_extra_points}")
+            if self.extra_point_radius <= 0:  # type: ignore[operator]
+                raise ValueError(f"extra_point_radius must be positive, got {self.extra_point_radius}")
+            if self.extra_point_min_clearance < 0:  # type: ignore[operator]
+                raise ValueError(f"extra_point_min_clearance must be non-negative, got {self.extra_point_min_clearance}")
 
     def min_segment_length(self, is_end_segment: bool) -> float:
         """
