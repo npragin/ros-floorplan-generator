@@ -1681,7 +1681,7 @@ class FloorplanGenerator:
                 indices = list(areas.keys())
                 weights = np.array([areas[i] for i in indices])
                 probabilities = weights / weights.sum()
-                rng = np.random.default_rng()
+                rng = np.random.default_rng(random.randrange(2**32))
                 ordered_indices = list(rng.choice(indices, size=len(indices), replace=False, p=probabilities))
 
                 for idx in ordered_indices:
