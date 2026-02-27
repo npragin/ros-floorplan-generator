@@ -92,13 +92,25 @@ class FloorplanRenderer:
         # Save the image
         image.save(output_path)
 
-    def render_debug(self, floorplan: Floorplan, output_path: str | Path) -> None:
+    def render_debug(
+        self,
+        floorplan: Floorplan,
+        output_path: str | Path,
+        robot_positions: list[tuple[float, float]] | None = None,
+        robot_radius: float | None = None,
+        extra_point_positions: list[tuple[float, float]] | None = None,
+        extra_point_radius: float | None = None,
+    ) -> None:
         """
         Render a debug visualization with colored regions.
 
         Args:
             floorplan: The floorplan to render.
             output_path: Path to save the PNG file.
+            robot_positions: Raw world-coordinate positions of robots.
+            robot_radius: Radius of each robot in meters.
+            extra_point_positions: Raw world-coordinate positions of extra points.
+            extra_point_radius: Radius of each extra point in meters.
 
         """
         output_path = Path(output_path)
@@ -182,6 +194,26 @@ class FloorplanRenderer:
             if isinstance(obstacle, Polygon):
                 exterior_coords = ring_to_pixel_coords(obstacle.exterior)
                 draw.polygon(exterior_coords, fill=(255, 0, 0))
+
+        # Draw robot positions (green circles)
+        if robot_positions and robot_radius is not None:
+            radius_px = robot_radius / self.resolution
+            for x, y in robot_positions:
+                cx, cy = world_to_pixel(x, y)
+                draw.ellipse(
+                    [cx - radius_px, cy - radius_px, cx + radius_px, cy + radius_px],
+                    fill=(0, 180, 0),
+                )
+
+        # Draw extra point positions (blue circles)
+        if extra_point_positions and extra_point_radius is not None:
+            radius_px = extra_point_radius / self.resolution
+            for x, y in extra_point_positions:
+                cx, cy = world_to_pixel(x, y)
+                draw.ellipse(
+                    [cx - radius_px, cy - radius_px, cx + radius_px, cy + radius_px],
+                    fill=(0, 100, 255),
+                )
 
         # Save the image
         image.save(output_path)

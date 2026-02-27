@@ -514,11 +514,6 @@ def generate(
     renderer.render_to_png(floorplan, output_path)
     typer.echo(f"  Saved occupancy grid to {output_path}")
 
-    if resolved_debug:
-        debug_path = output_path.with_stem(output_path.stem + "_debug")
-        renderer.render_debug(floorplan, debug_path)
-        typer.echo(f"  Saved debug visualization to {debug_path}")
-
     # Generate robot spawn positions and/or extra points if configured
     has_robots = params.robot_radius is not None
     has_extra_points = params.extra_point_radius is not None
@@ -577,6 +572,24 @@ def generate(
             centered_robot_positions, map_width, map_height, spawn_path, extra_points=centered_extra_points
         )
         typer.echo(f"  Saved world config to {spawn_path}")
+
+    if resolved_debug:
+        debug_path = output_path.with_stem(output_path.stem + "_debug")
+        robot_positions_for_debug: list[tuple[float, float]] | None = None
+        extra_positions_for_debug: list[tuple[float, float]] | None = None
+        if has_robots:
+            robot_positions_for_debug = robot_positions_raw  # type: ignore[possibly-undefined]
+        if has_extra_points:
+            extra_positions_for_debug = extra_positions_raw  # type: ignore[possibly-undefined]
+        renderer.render_debug(
+            floorplan,
+            debug_path,
+            robot_positions=robot_positions_for_debug,
+            robot_radius=params.robot_radius,
+            extra_point_positions=extra_positions_for_debug,
+            extra_point_radius=params.extra_point_radius,
+        )
+        typer.echo(f"  Saved debug visualization to {debug_path}")
 
     # Print some stats
     bounds = floorplan.get_bounds()
