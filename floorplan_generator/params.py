@@ -32,6 +32,9 @@ class FloorplanParams:
         num_open_spaces: Number of hallway segments to convert to open spaces (squares).
             Must be <= num_turns + 1.
         seed: Random seed for reproducible generation. When None, system entropy is used.
+        clustered_robot_spawns: If True (default), robots are placed using greedy circle packing
+            starting from a random valid position, clustering them together. If False, all robot
+            positions are chosen independently at random.
 
     """
 
@@ -60,6 +63,7 @@ class FloorplanParams:
     num_extra_points: int | None = None
     extra_point_radius: float | None = None
     extra_point_min_clearance: float | None = None
+    clustered_robot_spawns: bool = True
 
     def validate(self) -> None:
         """

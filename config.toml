@@ -30,6 +30,7 @@ obstacle_placement = "both"  # Options: "rooms", "hallways", "both"
 robot_radius = 0.255
 num_robots = 5
 robot_min_clearance = 0.1
+clustered_robot_spawns = true  # If true, robots are clustered. If false, all robots are placed randomly.
 spawn_export_filename = "world_config.yaml"
 
 ## Extra Points
