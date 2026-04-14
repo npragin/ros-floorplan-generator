@@ -65,14 +65,10 @@ def generate_spawn_positions(
     if len(candidates) == 0:
         raise ValueError("No candidate points found within the valid spawn region")
 
-    # Find starting point: centroid of valid region, or nearest valid point
-    centroid = valid_region.centroid
-    if valid_region.contains(centroid):
-        start = np.array([centroid.x, centroid.y])
-    else:
-        # Find nearest candidate to centroid
-        dists = np.linalg.norm(candidates - np.array([centroid.x, centroid.y]), axis=1)
-        start = candidates[np.argmin(dists)]
+    import random
+
+    # Pick a random starting point from the valid candidates
+    start = candidates[random.randrange(len(candidates))]
 
     # Greedy placement
     positions: list[tuple[float, float]] = [(float(start[0]), float(start[1]))]
