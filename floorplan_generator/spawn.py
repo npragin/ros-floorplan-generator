@@ -11,23 +11,26 @@ def generate_spawn_positions(
     num_robots: int,
     robot_radius: float,
     min_clearance: float,
+    clustered: bool = True,
     resolution: float = 0.05,
 ) -> list[tuple[float, float]]:
     """
-    Generate spawn positions for robots using greedy circle packing.
+    Generate spawn positions for robots.
 
     Erodes the free space by (robot_radius + min_clearance) to get the valid
-    region for robot centers, then greedily places robots as close together
-    as possible starting from the centroid.
+    region for robot centers, then places robots one at a time. The first robot
+    is always placed at a random valid location. Subsequent robots are placed
+    either greedily (nearest to the cluster centroid) when clustered=True, or
+    randomly when clustered=False.
 
     Args:
         free_space: The navigable space polygon.
         num_robots: Number of robots to place.
         robot_radius: Radius of each robot in meters.
         min_clearance: Minimum clearance from walls and between robot edges.
+        clustered: If True, use greedy circle packing to cluster robots together.
+            If False, place each robot at a random valid location.
         resolution: Grid resolution for candidate points in meters.
-        debug_path: If provided, saves a debug image showing the valid
-            spawn region and placed robot positions.
 
     Returns:
         List of (x, y) positions in world coordinates.
@@ -36,6 +39,8 @@ def generate_spawn_positions(
         ValueError: If not enough valid positions can be found.
 
     """
+    import random
+
     # Erode free space so robot edges are at least min_clearance from walls
     erosion = robot_radius + min_clearance
     valid_region = free_space.buffer(-erosion)
@@ -65,38 +70,30 @@ def generate_spawn_positions(
     if len(candidates) == 0:
         raise ValueError("No candidate points found within the valid spawn region")
 
-    import random
-
-    # Pick a random starting point from the valid candidates
-    start = candidates[random.randrange(len(candidates))]
-
-    # Greedy placement
-    positions: list[tuple[float, float]] = [(float(start[0]), float(start[1]))]
-    placed = np.array([start])
+    # First robot at a random valid location
+    first_pos = candidates[random.randrange(len(candidates))]
+    positions: list[tuple[float, float]] = [(float(first_pos[0]), float(first_pos[1]))]
+    placed = np.array([first_pos])
 
     for _ in range(1, num_robots):
-        # Compute distance from each candidate to all placed robots
+        # Drop candidates too close to any placed robot
         dists_to_placed = np.linalg.norm(candidates[:, np.newaxis, :] - placed[np.newaxis, :, :], axis=2)
-        # Minimum distance to any placed robot for each candidate
-        min_dists = dists_to_placed.min(axis=1)
+        candidates = candidates[dists_to_placed.min(axis=1) >= min_center_dist]
 
-        # Filter candidates that satisfy spacing constraint
-        valid_mask = min_dists >= min_center_dist
-        valid_candidates = candidates[valid_mask]
-
-        if len(valid_candidates) == 0:
+        if len(candidates) == 0:
             raise ValueError(
                 f"Could only place {len(positions)}/{num_robots} robots. "
                 f"Not enough space with robot_radius={robot_radius} and "
                 f"min_clearance={min_clearance}"
             )
 
-        # Find closest valid point to cluster centroid
-        cluster_centroid = placed.mean(axis=0)
-        dists_to_centroid = np.linalg.norm(valid_candidates - cluster_centroid, axis=1)
-        best_idx = np.argmin(dists_to_centroid)
+        if clustered:
+            # Pick the candidate closest to the cluster centroid
+            cluster_centroid = placed.mean(axis=0)
+            new_pos = candidates[np.argmin(np.linalg.norm(candidates - cluster_centroid, axis=1))]
+        else:
+            new_pos = candidates[random.randrange(len(candidates))]
 
-        new_pos = valid_candidates[best_idx]
         positions.append((float(new_pos[0]), float(new_pos[1])))
         placed = np.vstack([placed, new_pos])
 

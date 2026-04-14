@@ -47,6 +47,7 @@ DEFAULTS: dict[str, Any] = {
     "num_extra_points": None,
     "extra_point_radius": None,
     "extra_point_min_clearance": None,
+    "clustered_robot_spawns": True,
 }
 
 
@@ -361,6 +362,14 @@ def generate(
             help="Minimum clearance from walls and between extra point edges in meters.",
         ),
     ] = None,
+    clustered_robot_spawns: Annotated[
+        bool | None,
+        typer.Option(
+            "--clustered-robot-spawns/--no-clustered-robot-spawns",
+            help="If set, robots are clustered using greedy circle packing. If unset, all robots are placed randomly.",
+            show_default="clustered-robot-spawns",
+        ),
+    ] = None,
 ) -> None:
     """
     Generate office-style floorplans for ROS2 Stage simulator.
@@ -421,6 +430,9 @@ def generate(
     resolved_extra_point_min_clearance = resolve_param(
         extra_point_min_clearance, cfg, "extra_point_min_clearance", DEFAULTS["extra_point_min_clearance"]
     )
+    resolved_clustered_robot_spawns = resolve_param(
+        clustered_robot_spawns, cfg, "clustered_robot_spawns", DEFAULTS["clustered_robot_spawns"]
+    )
 
     # Validate required parameters
     if resolved_num_rooms is None:
@@ -471,6 +483,7 @@ def generate(
         num_extra_points=resolved_num_extra_points,
         extra_point_radius=resolved_extra_point_radius,
         extra_point_min_clearance=resolved_extra_point_min_clearance,
+        clustered_robot_spawns=resolved_clustered_robot_spawns,
     )
 
     typer.echo(f"Generating floorplan with {params.num_rooms} rooms...")
@@ -538,12 +551,14 @@ def generate(
             typer.echo(f"\nGenerating spawn positions for {params.num_robots} robots...")
             typer.echo(f"  Robot radius: {params.robot_radius}m")
             typer.echo(f"  Min clearance: {params.robot_min_clearance}m")
+            typer.echo(f"  Clustered spawns: {params.clustered_robot_spawns}")
 
             robot_positions_raw = generate_spawn_positions(
                 free_space=free_space,
                 num_robots=params.num_robots,  # type: ignore[arg-type]
                 robot_radius=params.robot_radius,
                 min_clearance=params.robot_min_clearance,  # type: ignore[arg-type]
+                clustered=params.clustered_robot_spawns,
                 resolution=resolved_resolution,
             )
             centered_robot_positions = transform_to_map_center(robot_positions_raw, bounds_for_center)

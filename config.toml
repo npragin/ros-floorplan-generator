@@ -31,6 +31,7 @@ robot_radius = 0.255
 num_robots = 5
 robot_min_clearance = 0.1
 spawn_export_filename = "world_config.yaml"
+clustered_robot_spawns = true  # If true, robots are clustered. If false, all robots are placed randomly.
 
 ## Extra Points
 num_extra_points = 3
